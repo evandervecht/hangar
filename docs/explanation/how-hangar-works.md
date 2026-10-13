@@ -26,7 +26,7 @@ The same idea protects your own fields. A scan only updates the columns Hangar d
 
 ## Active time
 
-Within a session, Hangar adds up the gaps between consecutive log lines. A gap longer than 15 minutes is counted as a break and left out. The result is an estimate of time the session was actually in use, not how long its window was open.
+Within a session, Hangar adds up the gaps between consecutive log lines. A gap longer than 15 minutes is counted as a break and left out. The result is an estimate of time the session was actually in use, not how long its window was open. Hangar stores the outcome per session per day, not every log line, so the database stays small however long you use it.
 
 Parallel sessions in the same project each count, so three agents running for an hour count as three hours. That measures agent time, not your wall-clock time.
 

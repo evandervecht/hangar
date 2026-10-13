@@ -14,7 +14,7 @@
 | Tools | automatic | AI tools with sessions here: `claude`, `codex`, `gemini`, `hermes` |
 | Sessions | automatic | number of distinct sessions |
 | Active | automatic | total active time, in hours |
-| 7 days | automatic | active time in the last 7 days |
+| 7 days | automatic | active time today and the 6 days before (UTC calendar days) |
 | Last active (UTC) | automatic | time of the most recent log line |
 | Description | automatic | first paragraph of `README.md`, else `CLAUDE.md`, else `AGENTS.md` |
 
@@ -87,11 +87,13 @@ Unknown git values are `null` in JSON and empty in CSV.
 
 ## Database
 
-`hangar.db` is SQLite, schema version 2 (`PRAGMA user_version`).
+`hangar.db` is SQLite, schema version 3 (`PRAGMA user_version`).
 
 | Table | Columns |
 |---|---|
 | `projects` | `path` (key), `name`, `origin`, `description`, `missing`, `host`, `first_seen`, `tags`, `status`, `notes`, `git_changed`, `git_unpushed`, `git_last_commit`, `stack` |
-| `events` | `file`, `project`, `tool`, `session`, `ts` (one row per log line) |
+| `activity` | `file`, `project`, `tool`, `session`, `day`, `first`, `last`, `secs` (one row per session per UTC day; `secs` is active time with idle gaps left out) |
 | `files` | `path` (key), `mtime`, `size` (one row per imported log file) |
 | `moves` | `from_path` (key), `to_path` (one row per merged project) |
+
+Schema 3 replaced the v0.5 `events` table (one row per log line) with `activity`. Opening a database with v0.6 converts it once and shrinks the file; an older Hangar opened afterwards shows no sessions until you upgrade again.

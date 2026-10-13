@@ -5,7 +5,7 @@ Hangar has four cleaners. The first two only change Hangar's own database. The l
 ## Forget projects whose folder is gone
 
 1. Click **Clean up** in the top bar.
-2. Under **Missing projects**, click **Forget all missing**.
+2. Under **Missing projects**, click **Forget all missing**. This forgets the missing projects in the list; hidden ones stay in the database.
 
 To forget one: select a project marked *(missing)*, open **Clean** in the detail panel and click **Forget**.
 

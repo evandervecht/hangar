@@ -45,6 +45,9 @@ struct App {
     quitting: bool,
     #[cfg(any(windows, target_os = "macos"))]
     tray: Option<tray::Tray>,
+    /// Creating the tray icon failed once; don't retry every frame.
+    #[cfg(any(windows, target_os = "macos"))]
+    tray_failed: bool,
 }
 
 enum Action {
@@ -90,6 +93,8 @@ pub fn run(
         quitting: false,
         #[cfg(any(windows, target_os = "macos"))]
         tray: None,
+        #[cfg(any(windows, target_os = "macos"))]
+        tray_failed: false,
     };
     app.start_scan();
     let opts = eframe::NativeOptions {
@@ -148,8 +153,8 @@ impl App {
             }
             Action::Forget => {
                 self.selected = None;
-                match scan::forget(&self.db, &sel.path) {
-                    Ok(()) => format!("forgot {}", sel.path),
+                match scan::forget(&mut self.db, std::slice::from_ref(&sel.path)) {
+                    Ok(_) => format!("forgot {}", sel.path),
                     Err(e) => format!("forget failed: {e}"),
                 }
             }
@@ -177,7 +182,7 @@ impl App {
 
     /// Scan on a background thread with its own connection; the window keeps responding.
     fn start_scan(&mut self) {
-        if self.scan.is_some() {
+        if self.scanning() {
             return;
         }
         let db_path = self.data_dir.join("hangar.db");
@@ -220,6 +225,14 @@ impl App {
         self.cfg.background || self.cfg.autostart || self.tray_start
     }
 
+    /// Hiding the window is only safe with a tray icon to bring it back (none on Linux, or if it failed).
+    fn has_tray(&self) -> bool {
+        #[cfg(any(windows, target_os = "macos"))]
+        return self.tray.is_some();
+        #[cfg(not(any(windows, target_os = "macos")))]
+        false
+    }
+
     fn show(&mut self, ctx: &egui::Context) {
         self.hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -228,6 +241,7 @@ impl App {
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
+        let scanning = self.scanning();
         let Some(draft) = self.settings.as_mut() else {
             return;
         };
@@ -237,7 +251,7 @@ impl App {
             .open(&mut open)
             .resizable(false)
             .min_width(600.0)
-            .enabled(!self.scan.is_some())
+            .enabled(!scanning)
             .show(ctx, |ui| {
                 ui.strong("Project folders");
                 ui.weak("Scanned 4 levels deep for git repos, next to the Claude Code and Codex logs.");
@@ -269,14 +283,16 @@ impl App {
             }
             // Starting at login only makes sense in the tray.
             cfg.background |= cfg.autostart;
-            let autostart_changed = cfg.autostart != self.cfg.autostart;
+            // Register first, so the saved setting never claims a login start that isn't there.
+            if cfg.autostart != self.cfg.autostart
+                && let Err(e) = crate::set_autostart(cfg.autostart)
+            {
+                self.message = format!("start at login not changed: {e}");
+                cfg.autostart = self.cfg.autostart;
+            }
             self.cfg = cfg;
             if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
                 self.message = format!("settings not saved: {e}");
-                return;
-            }
-            if autostart_changed && let Err(e) = crate::set_autostart(self.cfg.autostart) {
-                self.message = format!("start at login not changed: {e}");
                 return;
             }
             self.start_scan();
@@ -291,7 +307,7 @@ impl App {
         egui::Window::new("Clean up")
             .open(&mut open)
             .resizable(false)
-            .enabled(!self.scan.is_some())
+            .enabled(!self.scanning())
             .show(ctx, |ui| {
                 ui.strong("Missing projects");
                 ui.label(format!(
@@ -301,7 +317,14 @@ impl App {
                     .add_enabled(missing > 0, egui::Button::new("Forget all missing"))
                     .clicked()
                 {
-                    self.message = match scan::forget_missing(&mut self.db) {
+                    // Exactly the rows counted above; hidden (excluded) projects stay.
+                    let paths: Vec<String> = self
+                        .rows
+                        .iter()
+                        .filter(|r| r.missing)
+                        .map(|r| r.path.clone())
+                        .collect();
+                    self.message = match scan::forget(&mut self.db, &paths) {
                         Ok(n) => format!("forgot {n} missing projects"),
                         Err(e) => format!("forget failed: {e}"),
                     };
@@ -326,7 +349,7 @@ impl App {
                 });
                 if let Some((files, size)) = &self.old_logs {
                     ui.label(format!(
-                        "{} Claude/Codex log files, {:.1} MB. Hangar keeps their imported history.",
+                        "{} AI session log files, {:.1} MB. Hangar keeps their imported history.",
                         files.len(),
                         *size as f64 / 1e6
                     ));
@@ -354,10 +377,12 @@ impl eframe::App for App {
         let background = self.background();
         #[cfg(any(windows, target_os = "macos"))]
         {
-            if background && self.tray.is_none() {
+            if background && self.tray.is_none() && !self.tray_failed {
                 self.tray = tray::create(ctx);
+                self.tray_failed = self.tray.is_none();
             } else if !background {
                 self.tray = None;
+                self.tray_failed = false;
             }
             let cmds: Vec<tray::Cmd> = self
                 .tray
@@ -393,11 +418,14 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.hidden && !self.has_tray() {
+            self.hidden = false;
+        }
         if self.hidden {
             // --tray start, or still hidden after closing: keep the window out of sight.
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
-        if ctx.input(|i| i.viewport().close_requested()) && self.background() && !self.quitting {
+        if ctx.input(|i| i.viewport().close_requested()) && self.has_tray() && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             self.hidden = true;

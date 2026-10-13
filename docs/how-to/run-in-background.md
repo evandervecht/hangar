@@ -27,4 +27,4 @@ Run `hangar` while Hangar is already running: the running copy shows its window 
 
 ## Linux
 
-There's no tray icon on Linux. Background mode still hides the window on close and keeps scanning; run `hangar` again to bring it back.
+There's no tray icon on Linux, so closing the window quits Hangar as usual. While the window is open, background mode still rescans on the timer.

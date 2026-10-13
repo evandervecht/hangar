@@ -22,17 +22,17 @@ git push origin v0.2.0
 
 | File | Contains |
 |---|---|
-| `hangar-<tag>-x86_64-pc-windows-msvc.zip` | `hangar.exe` (with icon), README, LICENSE |
-| `hangar-<tag>-aarch64-apple-darwin.tar.gz` | `Hangar.app`, the bare `hangar` binary, README, LICENSE (Apple Silicon) |
-| `hangar-<tag>-x86_64-apple-darwin.tar.gz` | the same for Intel Macs |
-| `hangar-<tag>-x86_64-pc-windows-msvc.exe` | the bare Windows executable |
-| `hangar-<tag>-aarch64-apple-darwin` | the bare macOS binary, Apple Silicon (CLI use) |
-| `hangar-<tag>-x86_64-apple-darwin` | the bare macOS binary, Intel |
+| `hangar-<version>-windows-amd64.zip` | `hangar.exe` (with icon), README, LICENSE (`<version>` is the tag without the `v`) |
+| `hangar-<version>-darwin-arm64.tar.gz` | `Hangar.app` for Apple Silicon |
+| `hangar-<version>-darwin-amd64.tar.gz` | `Hangar.app` for Intel Macs |
+| `hangar-<version>-windows-amd64.exe` | the bare Windows executable |
 | `SHA256SUMS` | checksums of all the files above, see [Check a download](verify-download.md) |
 
 ## Unsigned binaries
 
 The binaries are not signed yet.
 
-- **macOS:** right-click `Hangar.app` and choose **Open** the first time. For the bare binary, run `xattr -d com.apple.quarantine ./hangar`.
+- **macOS:** after dragging Hangar to Applications, open it once; macOS blocks it. Go to **System Settings → Privacy & Security** and click **Open Anyway**. Or run `xattr -dr com.apple.quarantine /Applications/Hangar.app`.
+- **macOS says "Hangar is damaged and can't be opened":** that's a downloaded app without a valid signature (releases up to v0.5.0 weren't signed at all). Run `xattr -dr com.apple.quarantine /Applications/Hangar.app` once.
+- **macOS command line:** the CLI is inside the app: `/Applications/Hangar.app/Contents/MacOS/hangar list`. To type just `hangar`, run `ln -s /Applications/Hangar.app/Contents/MacOS/hangar /usr/local/bin/hangar` (or into any folder on your PATH).
 - **Windows:** SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.

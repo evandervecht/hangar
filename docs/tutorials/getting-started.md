@@ -4,10 +4,10 @@ In this tutorial you install Hangar, look at the projects it finds on your machi
 
 ## 1. Install
 
-Download the archive for your OS from [Releases](https://github.com/evandervecht/hangar/releases) and unpack it:
+Download Hangar for your OS from [Releases](https://github.com/evandervecht/hangar/releases):
 
-- **Windows:** put `hangar.exe` somewhere permanent, such as `%LOCALAPPDATA%\Programs\hangar`.
-- **macOS:** drag `Hangar.app` to Applications. The first time you open it, right-click it and choose **Open**, because the app isn't signed.
+- **Windows:** download `hangar-<version>-windows-amd64.exe` and put it somewhere permanent, such as `%LOCALAPPDATA%\Programs\hangar\hangar.exe`.
+- **macOS:** download `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `hangar-<version>-darwin-amd64.tar.gz` (Intel), double-click it to unpack, and drag **Hangar** onto **Applications**. The first time you open it, macOS blocks it because it isn't signed: go to **System Settings → Privacy & Security** and click **Open Anyway**.
 
 To build from source instead, clone the repo and run `./install.ps1` (Windows) or `./install.sh` (macOS). The installer also puts `hangar` on your PATH.
 
@@ -27,7 +27,7 @@ Look at the top row. That's the project you used most recently.
 
 - **Location** is the folder the project lives in.
 - **Status** shows *active* in grey: Hangar derived it, because you had a session in the last 14 days.
-- **Active** is the time spent in AI sessions there; **7 days** is the part from the last week.
+- **Active** is the time spent in AI sessions there; **7 days** is the part from today and the 6 days before.
 - **Description** is the first paragraph of the project's README.
 
 Type part of a project name into **Filter** and watch the table shrink.

@@ -15,7 +15,7 @@ Your file should show `OK`.
 ## Windows (PowerShell)
 
 ```powershell
-(Get-FileHash .\hangar-v0.4.0-x86_64-pc-windows-msvc.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\hangar-0.6.0-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 Compare the output with the line for that file in `SHA256SUMS`. They must match exactly.

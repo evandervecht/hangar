@@ -73,7 +73,7 @@ Everything stays on your machine. Hangar only reads the logs and writes its own 
 
 ## Install
 
-**Download:** from [Releases](https://github.com/evandervecht/hangar/releases), grab `hangar-<version>-x86_64-pc-windows-msvc.exe` (or the zip) on Windows, or the tar.gz with `Hangar.app` on macOS. Bare macOS binaries are attached too. The binaries are unsigned; see [Make a release](docs/how-to/release.md#unsigned-binaries) for the first-launch step.
+**Download:** from [Releases](https://github.com/evandervecht/hangar/releases), grab `hangar-<version>-windows-amd64.exe` (or the zip) on Windows. On macOS, grab `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `darwin-amd64` (Intel), double-click it and drag **Hangar** to **Applications**. The builds are unsigned; see [Make a release](docs/how-to/release.md#unsigned-binaries) for the first-launch step.
 
 **From source:** you need a [Rust toolchain](https://rustup.rs).
 
@@ -106,7 +106,7 @@ The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](doc
 
 Scope per version is in [SPEC.md](SPEC.md).
 
-**Next:** a Windows installer and a macOS disk image (DMG), and signed releases.
+**Next:** a Windows installer and signed releases.
 
 **Maybe later**, still being thought through:
 

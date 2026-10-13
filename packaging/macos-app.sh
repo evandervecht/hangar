@@ -39,4 +39,7 @@ cat > "$app/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
+# Ad-hoc signature: an unsigned bundle downloaded on Apple Silicon is reported as "damaged";
+# signed ad hoc it gets the normal "Open Anyway" prompt. Replace "-" with a Developer ID to sign for real.
+codesign --force --deep --sign - "$dest/Hangar.app"
 echo "Built $dest/Hangar.app"

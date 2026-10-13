@@ -17,45 +17,112 @@ CREATE TABLE IF NOT EXISTS projects(
   path TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, description TEXT NOT NULL,
   missing INTEGER NOT NULL, host TEXT NOT NULL, first_seen TEXT NOT NULL,
   tags TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS events(file TEXT NOT NULL, project TEXT NOT NULL, tool TEXT NOT NULL,
-  session TEXT NOT NULL, ts TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS events_file ON events(file);
-CREATE INDEX IF NOT EXISTS events_session ON events(tool, session, ts);
+CREATE TABLE IF NOT EXISTS activity(file TEXT NOT NULL, project TEXT NOT NULL, tool TEXT NOT NULL,
+  session TEXT NOT NULL, day TEXT NOT NULL, first TEXT NOT NULL, last TEXT NOT NULL, secs REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS activity_file ON activity(file);
+CREATE INDEX IF NOT EXISTS activity_project ON activity(project);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL);
 ";
+
+/// Log lines of the file being imported; folded into `activity` and cleared per file.
+const LINES: &str = "CREATE TEMP TABLE IF NOT EXISTS lines(file TEXT, project TEXT, tool TEXT, session TEXT, ts TEXT);";
+
+/// One `activity` row per file, project, tool, session and UTC day: first and last line, and the sum of
+/// the gaps between lines that are at most ?1 seconds (longer gaps are breaks). `{src}` holds the lines.
+const FOLD: &str = "
+INSERT INTO activity(file, project, tool, session, day, first, last, secs)
+SELECT file, project, tool, session, substr(ts, 1, 10), min(ts), max(ts),
+  coalesce(sum(CASE WHEN gap <= ?1 THEN gap ELSE 0 END), 0)
+FROM (SELECT file, project, tool, session, ts,
+        (julianday(ts) - julianday(LAG(ts) OVER (PARTITION BY tool, session ORDER BY ts))) * 86400 AS gap
+      FROM {src})
+GROUP BY file, project, tool, session, substr(ts, 1, 10)";
+
+fn fold(db: &Connection, src: &str) -> rusqlite::Result<()> {
+    db.execute(&FOLD.replace("{src}", src), [IDLE_SECS])?;
+    Ok(())
+}
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open(path)?;
     // The window reads while a background scan writes; WAL lets both proceed, the timeout covers commits.
     db.busy_timeout(std::time::Duration::from_secs(60))?;
     db.pragma_update(None, "journal_mode", "WAL")?;
-    db.execute_batch(SCHEMA)?;
-    migrate(&db)?;
+    init(&db)?;
     Ok(db)
 }
 
+fn init(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(SCHEMA)?;
+    migrate(db)?;
+    db.execute_batch(LINES)
+}
+
+const VERSION: i64 = 3;
+
 fn migrate(db: &Connection) -> rusqlite::Result<()> {
-    let version = db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?;
-    if version < 1 {
-        // v0.1.0 stored 'active' as a default, not a choice; empty status now means "derived from activity".
-        db.execute_batch(
-            "UPDATE projects SET status = '' WHERE status = 'active'; PRAGMA user_version = 1;",
-        )?;
+    let version = |db: &Connection| db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0));
+    // v0.5 kept one row per log line in `events`. An older Hangar still running (or a downgrade) may
+    // recreate it after the upgrade, so fold it whenever it exists, not only once.
+    let has_events = |db: &Connection| {
+        db.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+    };
+    if version(db)? >= VERSION && !has_events(db)? {
+        return Ok(());
     }
-    if version < 2 {
-        // Nullable/defaulted columns, so older Hangar versions still read this database.
-        db.execute_batch(
-            "BEGIN;
-             ALTER TABLE projects ADD COLUMN git_changed INTEGER;
-             ALTER TABLE projects ADD COLUMN git_unpushed INTEGER;
-             ALTER TABLE projects ADD COLUMN git_last_commit TEXT;
-             ALTER TABLE projects ADD COLUMN stack TEXT NOT NULL DEFAULT '';
-             CREATE TABLE IF NOT EXISTS moves(from_path TEXT PRIMARY KEY, to_path TEXT NOT NULL);
-             PRAGMA user_version = 2;
-             COMMIT;",
-        )?;
+    // IMMEDIATE takes the write lock first, so a second Hangar starting at the same moment waits
+    // and then finds the work done, instead of failing on "duplicate column".
+    db.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| {
+        let v = version(db)?;
+        if v < 1 {
+            // v0.1.0 stored 'active' as a default, not a choice; empty status now means "derived from activity".
+            db.execute(
+                "UPDATE projects SET status = '' WHERE status = 'active'",
+                [],
+            )?;
+        }
+        if v < 2 {
+            // Nullable/defaulted columns, so older Hangar versions still read this database.
+            db.execute_batch(
+                "ALTER TABLE projects ADD COLUMN git_changed INTEGER;
+                 ALTER TABLE projects ADD COLUMN git_unpushed INTEGER;
+                 ALTER TABLE projects ADD COLUMN git_last_commit TEXT;
+                 ALTER TABLE projects ADD COLUMN stack TEXT NOT NULL DEFAULT '';
+                 CREATE TABLE IF NOT EXISTS moves(from_path TEXT PRIMARY KEY, to_path TEXT NOT NULL);",
+            )?;
+        }
+        let converted = has_events(db)?;
+        if converted {
+            // Fold into daily summaries, keeping every hour. A file the old version re-imported
+            // replaces its earlier summary.
+            db.execute(
+                "DELETE FROM activity WHERE file IN (SELECT file FROM events)",
+                [],
+            )?;
+            fold(db, "events")?;
+            db.execute("DROP TABLE events", [])?;
+        }
+        db.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
+        Ok(converted)
+    })();
+    match result {
+        Ok(converted) => {
+            db.execute_batch("COMMIT")?;
+            if converted {
+                db.execute_batch("VACUUM")?; // give the space of the dropped line table back
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let _ = db.execute_batch("ROLLBACK");
+            Err(e)
+        }
     }
-    Ok(())
 }
 
 pub struct Stats {
@@ -105,7 +172,7 @@ pub fn run(
         if seen == Some((mtime, size)) {
             continue;
         }
-        tx.execute("DELETE FROM events WHERE file = ?1", [&key])?;
+        tx.execute("DELETE FROM activity WHERE file = ?1", [&key])?;
         if tool == "hermes" {
             import_hermes(&tx, &file, &key, &moves, &mut cache)?;
         } else {
@@ -116,6 +183,8 @@ pub fn run(
             };
             import_file(&tx, &file, &key, tool, cwd, &moves, &mut cache)?;
         }
+        fold(&tx, "lines")?;
+        tx.execute("DELETE FROM lines", [])?;
         tx.execute(
             "INSERT OR REPLACE INTO files(path, mtime, size) VALUES (?1, ?2, ?3)",
             params![key, mtime, size],
@@ -124,7 +193,7 @@ pub fn run(
     }
 
     let mut projects: Vec<String> = {
-        let mut st = tx.prepare("SELECT DISTINCT project FROM events")?;
+        let mut st = tx.prepare("SELECT DISTINCT project FROM activity")?;
         st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
     };
     for root in roots {
@@ -207,7 +276,7 @@ fn import_file(
         ..Default::default()
     };
     let mut ins = tx.prepare_cached(
-        "INSERT INTO events(file, project, tool, session, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO lines(file, project, tool, session, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     for line in BufReader::new(f).lines() {
         // Unparseable lines (partial writes, unknown shapes) are skipped.
@@ -259,7 +328,7 @@ fn import_hermes(
         Err(_) => return Ok(()), // schema we don't know: skip rather than fail the scan
     };
     let mut ins = tx.prepare_cached(
-        "INSERT INTO events(file, project, tool, session, ts) VALUES (?1, ?2, 'hermes', ?3, ?4)",
+        "INSERT INTO lines(file, project, tool, session, ts) VALUES (?1, ?2, 'hermes', ?3, ?4)",
     )?;
     for (session, cwd, ts) in rows {
         let project = cache
@@ -674,16 +743,11 @@ pub struct Row {
 }
 
 const LIST_SQL: &str = "
-WITH g AS (
-  SELECT project, tool, session, ts,
-    (julianday(ts) - julianday(LAG(ts) OVER (PARTITION BY tool, session ORDER BY ts))) * 86400 AS gap
-  FROM events),
-a AS (
+WITH a AS (
   SELECT project, group_concat(DISTINCT tool) AS tools, count(DISTINCT tool || session) AS sessions,
-    min(ts) AS first, max(ts) AS last,
-    sum(CASE WHEN gap <= ?1 THEN gap ELSE 0 END) AS total,
-    sum(CASE WHEN gap <= ?1 AND julianday(ts) >= julianday('now', '-7 days') THEN gap ELSE 0 END) AS week
-  FROM g GROUP BY project)
+    min(first) AS first, max(last) AS last, sum(secs) AS total,
+    sum(CASE WHEN day >= date('now', '-6 days') THEN secs ELSE 0 END) AS week
+  FROM activity GROUP BY project)
 SELECT p.path, p.name, p.origin, p.description, p.missing, p.tags, p.status, p.notes,
   coalesce(a.tools, ''), coalesce(a.sessions, 0), coalesce(a.first, p.first_seen), coalesce(a.last, ''),
   coalesce(a.total, 0), coalesce(a.week, 0),
@@ -696,7 +760,7 @@ ORDER BY coalesce(a.last, '') DESC, p.name";
 /// All projects, newest activity first, excluded paths hidden (so editing excludes needs no re-import).
 pub fn list(db: &Connection, excludes: &[String]) -> rusqlite::Result<Vec<Row>> {
     let mut st = db.prepare(LIST_SQL)?;
-    let rows = st.query_map([IDLE_SECS], |r| {
+    let rows = st.query_map([], |r| {
         Ok(Row {
             path: r.get(0)?,
             name: r.get(1)?,
@@ -893,7 +957,7 @@ pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> 
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
     tx.execute(
-        "UPDATE events SET project = ?2 WHERE project = ?1",
+        "UPDATE activity SET project = ?2 WHERE project = ?1",
         [from, to],
     )?;
     tx.execute(
@@ -920,10 +984,16 @@ pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> 
 /// RFC 4180 CSV of the rows, for spreadsheets and other tools.
 pub fn csv(rows: &[Row]) -> String {
     let q = |s: &str| {
+        // A cell starting with = + - @ (or tab/CR) runs as a formula in Excel or Sheets; READMEs are untrusted.
+        let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+            format!("'{s}")
+        } else {
+            s.to_string()
+        };
         if s.contains([',', '"', '\n', '\r']) {
             format!("\"{}\"", s.replace('"', "\"\""))
         } else {
-            s.to_string()
+            s
         }
     };
     let opt = |n: Option<i64>| n.map_or(String::new(), |n| n.to_string());
@@ -967,21 +1037,15 @@ pub fn save_manual(db: &Connection, r: &Row) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Drop one project and its history from the database (the folder and logs are untouched).
-pub fn forget(db: &Connection, path: &str) -> rusqlite::Result<()> {
-    db.execute("DELETE FROM events WHERE project = ?1", [path])?;
-    db.execute("DELETE FROM projects WHERE path = ?1", [path])?;
-    Ok(())
-}
-
-/// Forget every project whose folder is gone. Returns how many.
-pub fn forget_missing(db: &mut Connection) -> rusqlite::Result<usize> {
+/// Drop these projects and their history from the database (folders and logs are untouched).
+/// The caller passes the exact paths it showed, so hidden projects are never caught along.
+pub fn forget(db: &mut Connection, paths: &[String]) -> rusqlite::Result<usize> {
     let tx = db.transaction()?;
-    tx.execute(
-        "DELETE FROM events WHERE project IN (SELECT path FROM projects WHERE missing = 1)",
-        [],
-    )?;
-    let n = tx.execute("DELETE FROM projects WHERE missing = 1", [])?;
+    let mut n = 0;
+    for p in paths {
+        tx.execute("DELETE FROM activity WHERE project = ?1", [p])?;
+        n += tx.execute("DELETE FROM projects WHERE path = ?1", [p])?;
+    }
     tx.commit()?;
     Ok(n)
 }
@@ -1057,9 +1121,12 @@ mod tests {
     }
 
     #[test]
-    fn status_migrates_and_derives() {
+    fn status_and_line_history_migrate() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
+        // v0.5 and older kept one row per log line in `events`.
+        db.execute_batch("CREATE TABLE events(file, project, tool, session, ts)")
+            .unwrap();
         for (p, status) in [("/old", "active"), ("/paused", "paused")] {
             db.execute(
                 "INSERT INTO projects(path, name, origin, description, missing, host, first_seen, status) VALUES (?1,'n','','',0,'h','',?2)",
@@ -1067,31 +1134,36 @@ mod tests {
             )
             .unwrap();
         }
-        db.execute(
-            "INSERT INTO events VALUES ('f','/recent','claude','s',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-            [],
-        )
-        .unwrap();
+        for ago in ["-10 minutes", "-5 minutes"] {
+            db.execute(
+                "INSERT INTO events VALUES ('f','/recent','claude','s',strftime('%Y-%m-%dT%H:%M:%fZ','now',?1))",
+                [ago],
+            )
+            .unwrap();
+        }
         db.execute(
             "INSERT INTO projects(path, name, origin, description, missing, host, first_seen) VALUES ('/recent','n','','',0,'h','')",
             [],
         )
         .unwrap();
         migrate(&db).unwrap();
-        let shown: HashMap<String, String> = list(&db, &[])
+        let rows: HashMap<String, Row> = list(&db, &[])
             .unwrap()
             .into_iter()
-            .map(|r| (r.path, r.shown_status))
+            .map(|r| (r.path.clone(), r))
             .collect();
-        assert_eq!(shown["/old"], "idle");
-        assert_eq!(shown["/paused"], "paused");
-        assert_eq!(shown["/recent"], "active");
+        assert_eq!(rows["/old"].shown_status, "idle");
+        assert_eq!(rows["/paused"].shown_status, "paused");
+        assert_eq!(rows["/recent"].shown_status, "active");
+        // The 5 minutes between the two old lines survive the fold, in total and in the last 7 days.
+        assert!((rows["/recent"].active_secs - 300.0).abs() < 1.0);
+        assert!((rows["/recent"].week_secs - 300.0).abs() < 1.0);
+        assert_eq!(rows["/recent"].sessions, 1);
     }
 
     fn test_db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
-        db.execute_batch(SCHEMA).unwrap();
-        migrate(&db).unwrap();
+        init(&db).unwrap();
         db
     }
 
@@ -1114,7 +1186,7 @@ mod tests {
         let v: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, VERSION);
         assert_eq!(list(&db, &[]).unwrap()[0].git_changed, None);
     }
 
@@ -1177,10 +1249,11 @@ mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO events VALUES ('f','/old/app','claude','s','2026-01-01T00:00:00.000Z')",
+            "INSERT INTO lines VALUES ('f','/old/app','claude','s','2026-01-01T00:00:00.000Z')",
             [],
         )
         .unwrap();
+        fold(&db, "lines").unwrap();
         merge(&mut db, "/old/app", "/new/app").unwrap();
         let rows = list(&db, &[]).unwrap();
         assert_eq!(rows.len(), 1);
@@ -1192,7 +1265,7 @@ mod tests {
             ),
             ("/new/app", "keep", 1)
         );
-        assert_eq!(rows[0].first_seen, "2026-01-01T00:00:00.000Z"); // from events, which moved over
+        assert_eq!(rows[0].first_seen, "2026-01-01T00:00:00.000Z"); // from activity, which moved over
         let moves = vec![("/old/app".to_string(), "/new/app".to_string())];
         assert_eq!(
             Path::new(&apply_moves("/old/app/src", &moves)),
@@ -1229,6 +1302,50 @@ mod tests {
     }
 
     #[test]
+    fn csv_cells_never_start_a_formula() {
+        let db = test_db();
+        add_project(&db, "/p", "no git");
+        db.execute(
+            "UPDATE projects SET notes = '=HYPERLINK(\"x\")', tags = '@a', description = '-1+2' WHERE path = '/p'",
+            [],
+        )
+        .unwrap();
+        let out = csv(&list(&db, &[]).unwrap());
+        assert!(out.contains("\"'=HYPERLINK(\"\"x\"\")\""), "{out}");
+        assert!(out.contains(",'@a,") && out.contains(",'-1+2\r\n"), "{out}");
+    }
+
+    #[test]
+    fn forget_drops_only_the_given_projects() {
+        let mut db = test_db();
+        for p in ["/gone", "/gone-but-hidden"] {
+            add_project(&db, p, "no git");
+            db.execute(
+                "INSERT INTO lines VALUES ('f', ?1, 'claude', 's', '2026-01-01T00:00:00Z')",
+                [p],
+            )
+            .unwrap();
+        }
+        fold(&db, "lines").unwrap();
+        db.execute("UPDATE projects SET missing = 1", []).unwrap();
+        assert_eq!(forget(&mut db, &["/gone".to_string()]).unwrap(), 1);
+        let left: Vec<String> = list(&db, &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(left, ["/gone-but-hidden"]);
+        let n: i64 = db
+            .query_row(
+                "SELECT count(*) FROM activity WHERE project = '/gone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
     fn missing_folder_keeps_last_known_facts() {
         let home = std::env::temp_dir().join("hangar-missing-test");
         let gone = home.join("gone-project");
@@ -1242,10 +1359,12 @@ mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO events VALUES ('f', ?1, 'claude', 's', '2026-01-01T00:00:00.000Z')",
+            "INSERT INTO lines VALUES ('f', ?1, 'claude', 's', '2026-01-01T00:00:00.000Z')",
             [gone.to_string_lossy()],
         )
         .unwrap();
+        fold(&db, "lines").unwrap();
+        db.execute("DELETE FROM lines", []).unwrap();
         run(&mut db, &home, &[], &[]).unwrap();
         let r = &list(&db, &[]).unwrap()[0];
         assert!(r.missing);
@@ -1428,8 +1547,7 @@ mod tests {
     #[test]
     fn active_time_drops_idle_gaps() {
         let db = Connection::open_in_memory().unwrap();
-        db.execute_batch(SCHEMA).unwrap();
-        migrate(&db).unwrap();
+        init(&db).unwrap();
         db.execute(
             "INSERT INTO projects(path, name, origin, description, missing, host, first_seen) VALUES ('/p','p','','',0,'h','')",
             [],
@@ -1442,9 +1560,10 @@ mod tests {
             "2026-08-06T12:10:00.000Z",
             "2026-08-06T12:15:00.589Z",
         ] {
-            db.execute("INSERT INTO events VALUES ('f','/p','claude','s',?1)", [ts])
+            db.execute("INSERT INTO lines VALUES ('f','/p','claude','s',?1)", [ts])
                 .unwrap();
         }
+        fold(&db, "lines").unwrap();
         let r = &list(&db, &[]).unwrap()[0];
         assert!((r.active_secs - 900.589).abs() < 0.01, "{}", r.active_secs);
         assert_eq!(r.sessions, 1);

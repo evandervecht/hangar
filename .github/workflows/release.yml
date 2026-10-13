@@ -27,10 +27,13 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            arch: amd64
           - os: macos-latest
             target: aarch64-apple-darwin
+            arch: arm64
           - os: macos-latest
             target: x86_64-apple-darwin
+            arch: amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,14 +47,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath hangar-${{ github.ref_name }}-${{ matrix.target }}.zip
-          Copy-Item target/${{ matrix.target }}/release/hangar.exe hangar-${{ github.ref_name }}-${{ matrix.target }}.exe
+          $name = "hangar-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-${{ matrix.arch }}"
+          Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath "$name.zip"
+          Copy-Item target/${{ matrix.target }}/release/hangar.exe "$name.exe"
       - name: Package (macOS)
         if: runner.os == 'macOS'
+        # hangar-<version>-darwin-<arch>.tar.gz holding Hangar.app; tar keeps the signature and permissions.
         run: |
-          sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" .
-          tar -czf hangar-${{ github.ref_name }}-${{ matrix.target }}.tar.gz Hangar.app README.md LICENSE -C target/${{ matrix.target }}/release hangar
-          cp target/${{ matrix.target }}/release/hangar hangar-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir out
+          sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" out
+          tar -czf "hangar-${GITHUB_REF_NAME#v}-darwin-${{ matrix.arch }}.tar.gz" -C out Hangar.app
 
       - run: gh release upload "$GITHUB_REF_NAME" hangar-* --repo "$GITHUB_REPOSITORY" --clobber
         shell: bash

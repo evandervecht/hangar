@@ -176,6 +176,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let arg = env::args().nth(1);
     if arg.is_none() || arg.as_deref() == Some("--tray") {
         release_own_console();
+        // Re-register on each start, so the login entry follows the exe if it was moved. Not from a
+        // cargo build (target/) or a quarantined macOS copy (AppTranslocation): those paths don't last.
+        let exe = env::current_exe().unwrap_or_default();
+        let lasting = !exe
+            .components()
+            .any(|c| c.as_os_str() == "target" || c.as_os_str() == "AppTranslocation");
+        if cfg.autostart && lasting {
+            let _ = set_autostart(true);
+        }
         // Without a console, a failed start would be silent: leave the reason in the data folder.
         if let Err(e) = run_window(&dir, home, cfg, cfg_path, arg.is_some()) {
             let _ = fs::write(
