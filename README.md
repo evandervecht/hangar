@@ -34,7 +34,7 @@
     <img alt="GitHub Forks" src="https://img.shields.io/github/forks/evandervecht/hangar?color=2196F3&style=for-the-badge">
   </a>
   <!-- Sponsor -->
-  <a href="https://github.com/sponsors/evandervecht">
+  <a href="https://github.com/sponsors/evandervecht?metadata_project=hangar">
     <img alt="Sponsor" src="https://img.shields.io/badge/sponsor-%E2%9D%A4-EA4AAA.svg?logo=githubsponsors&logoColor=white&style=for-the-badge">
   </a>
 </p>
@@ -102,7 +102,7 @@ v1 scope is in [SPEC.md](SPEC.md). v2 plans: a tray icon and a background servic
 
 ## Support
 
-Hangar is free and MIT-licensed. If it saves you time, you can [sponsor its development on GitHub](https://github.com/sponsors/evandervecht).
+Hangar is free and MIT-licensed. If it saves you time, you can [sponsor its development on GitHub](https://github.com/sponsors/evandervecht?metadata_project=hangar).
 
 ## License
 
