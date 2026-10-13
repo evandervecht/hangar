@@ -75,31 +75,52 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         Some("list") => {
-            println!(
-                "{:<55} {:<8} {:<13} {:>8} {:>8} {:>7} {:<16} ORIGIN",
-                "PROJECT", "STATUS", "TOOLS", "SESSIONS", "ACTIVE", "7 DAYS", "LAST (UTC)"
-            );
-            for r in scan::list(&db, &cfg.excludes)? {
-                let name = if r.missing {
-                    format!("{} (missing)", r.path)
-                } else {
-                    r.path
-                };
-                println!(
-                    "{:<55} {:<8} {:<13} {:>8} {:>8} {:>7} {:<16} {}",
-                    name,
-                    r.shown_status,
-                    r.tools,
-                    r.sessions,
-                    gui::hours(r.active_secs),
-                    gui::hours(r.week_secs),
-                    r.last_active.get(..16).unwrap_or("").replace('T', " "),
-                    r.origin
-                );
+            let rows = scan::list(&db, &cfg.excludes)?;
+            match env::args().nth(2).as_deref() {
+                Some("--json") => println!("{}", serde_json::to_string_pretty(&rows)?),
+                Some("--csv") => print!("{}", scan::csv(&rows)),
+                Some(_) => {
+                    eprintln!("usage: hangar list [--json | --csv]");
+                    std::process::exit(2);
+                }
+                None => {
+                    println!(
+                        "{:<55} {:<8} {:<20} {:<13} {:>8} {:>8} {:>7} {:<16} ORIGIN",
+                        "PROJECT",
+                        "STATUS",
+                        "GIT",
+                        "TOOLS",
+                        "SESSIONS",
+                        "ACTIVE",
+                        "7 DAYS",
+                        "LAST (UTC)"
+                    );
+                    for r in rows {
+                        let name = if r.missing {
+                            format!("{} (missing)", r.path)
+                        } else {
+                            r.path.clone()
+                        };
+                        println!(
+                            "{:<55} {:<8} {:<20} {:<13} {:>8} {:>8} {:>7} {:<16} {}",
+                            name,
+                            r.shown_status,
+                            scan::git_label(&r),
+                            r.tools,
+                            r.sessions,
+                            gui::hours(r.active_secs),
+                            gui::hours(r.week_secs),
+                            r.last_active.get(..16).unwrap_or("").replace('T', " "),
+                            r.origin
+                        );
+                    }
+                }
             }
         }
         Some(_) => {
-            eprintln!("usage: hangar [scan | list]   (no argument opens the window)");
+            eprintln!(
+                "usage: hangar [scan | list [--json | --csv]]   (no argument opens the window)"
+            );
             std::process::exit(2);
         }
     }

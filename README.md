@@ -59,7 +59,11 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Shows where it lives and where it syncs to:** the path and the git origin, or "local only" / "no git".
 - **Shows the time spent:** sessions, active time (total and the last 7 days, with idle gaps over 15 minutes left out) and when the project was last active.
 - **Shows the state:** *active* or *idle* from recent activity, unless you set active / paused / archived yourself. You can also add tags and notes.
-- **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*.
+- **Flags work at risk:** uncommitted changes, unpushed commits, repos without a remote and folders without git, with an **At risk only** filter.
+- **Links clones:** every checkout of the same repo is counted and listed, whatever the URL style.
+- **Detects the stack:** rust, node, python, go, terraform and more, from the files in each project.
+- **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*. If it moved, merge it into its new location and keep its history.
+- **Exports:** `hangar list --json` or `--csv` for spreadsheets and scripts.
 - **Settings:** choose the project folders to scan and the paths to hide, right in the app.
 - **Cleans up:** forget missing projects, hide noise, and move old AI session logs or whole project folders to the Recycle Bin / Trash.
 - **Themes:** System, Dark, Light, or Hangar (navy with the logo's coral and cyan accents).
@@ -85,6 +89,7 @@ cd hangar
 hangar          # open the window (scans on launch, Rescan button for more)
 hangar scan     # import new sessions and print counts
 hangar list     # print the project table
+hangar list --json   # or --csv, for other tools
 ```
 
 ## Documentation
@@ -92,13 +97,23 @@ hangar list     # print the project table
 The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](docs/README.md).
 
 - **Tutorial:** [Getting started](docs/tutorials/getting-started.md)
-- **How-to:** [Choose what Hangar scans](docs/how-to/configure-sources.md) · [Clean up](docs/how-to/clean-up.md) · [Change the theme](docs/how-to/change-theme.md) · [Make a release](docs/how-to/release.md) · [Add another AI tool](docs/how-to/add-an-ai-tool.md)
+- **How-to:** [Choose what Hangar scans](docs/how-to/configure-sources.md) · [Find projects at risk](docs/how-to/find-at-risk-projects.md) · [Merge a moved project](docs/how-to/merge-a-moved-project.md) · [Export](docs/how-to/export.md) · [Clean up](docs/how-to/clean-up.md) · [Change the theme](docs/how-to/change-theme.md) · [Make a release](docs/how-to/release.md) · [Add another AI tool](docs/how-to/add-an-ai-tool.md)
 - **Reference:** [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Project fields](docs/reference/project-fields.md)
 - **Explanation:** [How Hangar works](docs/explanation/how-hangar-works.md)
 
 ## Roadmap
 
-v1 scope is in [SPEC.md](SPEC.md). v2 plans: a tray icon and a background service. Later: more AI tools, merging data from several machines, and signed releases.
+Scope per version is in [SPEC.md](SPEC.md).
+
+**Next:** a tray icon and a background service.
+
+**Maybe later**, still being thought through:
+
+- **Cost per project:** tokens and spend per project and per week, across every AI tool: Claude Code, Codex, Cursor, Hermes, Gemini and others, which also means reading those tools' logs.
+- **Change history:** a timeline per project of what changed and when (origin, status, moves).
+- **Ownership:** an owner or client field, with hours per client.
+- **Several machines:** one view across your Mac and Windows machines without any network connection, for example by exporting a file on one machine and importing it on the other.
+- Signed and notarized releases.
 
 ## Support
 

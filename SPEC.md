@@ -40,6 +40,14 @@ Only new/changed log files are re-imported. History is never purged.
 - Themes: System, Dark, Light, Hangar. App icon on the Windows exe and in a macOS `Hangar.app`.
 - Installers add Hangar to PATH. Docs follow Diátaxis.
 
+## v0.4 additions (CMDB)
+- Git health per repo (changed files, unpushed commits, last commit; `?` when git can't read it) and an at-risk filter.
+- Clones: projects grouped by normalized origin URL.
+- Moved projects: manual "Merge into" with path aliases so later log lines follow; missing projects keep last-known facts.
+- Stack detection from marker files. Export: `hangar list --json | --csv`.
+
 ## Deferred
-v2: tray icon + background service. Later: rendered markdown, resume session, more AI tools,
-multi-machine merge, signing/notarization, CI.
+v2: tray icon + background service.
+Maybe later (CMDB): cost per project across all AI tools (Claude Code, Codex, Cursor, Hermes, Gemini, …);
+change history per project; owner/client field; several machines merged offline (export/import file).
+Later: rendered markdown, resume session, more AI tools, signing/notarization.

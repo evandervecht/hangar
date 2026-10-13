@@ -11,6 +11,8 @@ const THEMES: [(&str, &str); 4] = [
     ("hangar", "Hangar"),
 ];
 
+const UNKNOWN_GIT: &str = "Git couldn't read this repo, often 'dubious ownership' (the folder belongs to another user). Run `git status` in it to see why.";
+
 /// Manual statuses; "" means derived from activity.
 const STATUSES: [&str; 4] = ["", "active", "paused", "archived"];
 
@@ -21,6 +23,7 @@ struct App {
     cfg_path: PathBuf,
     rows: Vec<Row>,
     filter: String,
+    at_risk_only: bool,
     selected: Option<Row>,
     full_text: String,
     message: String,
@@ -37,6 +40,8 @@ enum Action {
     Hide,
     Forget,
     TrashFolder,
+    /// Merge the selected (missing) project into this path.
+    Merge(String),
 }
 
 pub fn run(
@@ -54,6 +59,7 @@ pub fn run(
         cfg_path,
         rows,
         filter: String::new(),
+        at_risk_only: false,
         selected: None,
         full_text: String::new(),
         message,
@@ -133,6 +139,13 @@ impl App {
                     format!("moved {} to the Recycle Bin / Trash", sel.path)
                 }
                 Err(e) => format!("delete failed: {e}"),
+            },
+            Action::Merge(to) => match scan::merge(&mut self.db, &sel.path, &to) {
+                Ok(()) => {
+                    self.selected = None;
+                    format!("merged {} into {to}", sel.path)
+                }
+                Err(e) => format!("merge failed: {e}"),
             },
         };
         self.reload();
@@ -260,6 +273,8 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("Filter");
                 ui.text_edit_singleline(&mut self.filter);
+                ui.checkbox(&mut self.at_risk_only, "At risk only")
+                    .on_hover_text("No git, no remote, uncommitted changes or unpushed commits");
                 // shortcut: rescan blocks the UI for a few seconds, move to a thread with the v2 background service.
                 if ui.button("Rescan").clicked() {
                     self.rescan();
@@ -304,8 +319,30 @@ impl eframe::App for App {
         }
 
         let mut action = None;
+        let mut clicked = None;
         if let Some(sel) = self.selected.as_mut() {
             let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
+            let key = scan::origin_key(&sel.origin);
+            let clones: Vec<&Row> = self
+                .rows
+                .iter()
+                .filter(|r| {
+                    r.path != sel.path && key.is_some() && scan::origin_key(&r.origin) == key
+                })
+                .collect();
+            // A moved project looks like a new one with the same repo (or, without git, the same folder name).
+            let move_targets: Vec<&Row> = if sel.missing {
+                self.rows
+                    .iter()
+                    .filter(|r| !r.missing && r.path != sel.path)
+                    .filter(|r| match &key {
+                        Some(k) => scan::origin_key(&r.origin).as_ref() == Some(k),
+                        None => r.name == sel.name,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
             egui::Panel::right("detail")
                 .resizable(true)
                 .default_size(450.0)
@@ -319,6 +356,46 @@ impl eframe::App for App {
                         sel.tools,
                         sel.first_seen.get(..10).unwrap_or("")
                     ));
+                    let git = scan::git_label(sel);
+                    let last = sel.git_last_commit.as_deref().and_then(|t| t.get(..10));
+                    let git_line = match last {
+                        Some(d) => format!("Git: {git}, last commit {d}"),
+                        None => format!("Git: {git}"),
+                    };
+                    if sel.at_risk {
+                        ui.colored_label(ui.visuals().warn_fg_color, format!("{git_line} (at risk)"));
+                    } else {
+                        ui.label(git_line);
+                    }
+                    if !sel.stack.is_empty() {
+                        ui.label(format!("Stack: {}", sel.stack));
+                    }
+                    if !clones.is_empty() {
+                        ui.collapsing(format!("Other clones ({})", clones.len()), |ui| {
+                            for c in &clones {
+                                if ui.link(&c.path).clicked() {
+                                    clicked = Some((*c).clone());
+                                }
+                            }
+                        });
+                    }
+                    if sel.missing {
+                        ui.separator();
+                        if move_targets.is_empty() {
+                            ui.weak("Folder is gone. No project with the same repo or name found to merge into.");
+                        } else {
+                            ui.label("Folder is gone. If it moved, merge its history into the new location:");
+                            for t in &move_targets {
+                                if ui
+                                    .button(format!("Merge into {}", t.path))
+                                    .on_hover_text("Moves sessions, fills empty tags/status/notes, and maps the old path to this one")
+                                    .clicked()
+                                {
+                                    action = Some(Action::Merge(t.path.clone()));
+                                }
+                            }
+                        }
+                    }
                     ui.horizontal(|ui| {
                         if ui.button("Open folder").clicked() {
                             open(&sel.path);
@@ -380,6 +457,15 @@ impl eframe::App for App {
                                 ui.weak(format!("Folder can't be deleted: {why}."));
                             }
                             None => {
+                                if sel.git_changed.is_some_and(|n| n > 0)
+                                    || sel.git_unpushed.is_some_and(|n| n > 0)
+                                    || sel.origin == "local only"
+                                {
+                                    ui.colored_label(
+                                        ui.visuals().warn_fg_color,
+                                        format!("This folder holds work that isn't pushed anywhere ({}).", scan::git_label(sel)),
+                                    );
+                                }
                                 ui.label(format!(
                                     "Delete the folder: type \"{}\" to confirm.",
                                     sel.name
@@ -406,18 +492,20 @@ impl eframe::App for App {
             self.apply(a);
         }
 
-        let mut clicked = None;
         egui::CentralPanel::default().show(ui, |ui| {
             let f = self.filter.to_lowercase();
             egui::ScrollArea::both().show(ui, |ui| {
                 egui::Grid::new("projects")
                     .striped(true)
-                    .num_columns(10)
+                    .num_columns(13)
                     .show(ui, |ui| {
                         for h in [
                             "Project",
                             "Location",
                             "Status",
+                            "Git",
+                            "Stack",
+                            "Clones",
                             "Tags",
                             "Tools",
                             "Sessions",
@@ -431,14 +519,15 @@ impl eframe::App for App {
                         ui.end_row();
                         let haystack = |r: &Row| {
                             format!(
-                                "{} {} {} {} {}",
-                                r.name, r.path, r.tags, r.shown_status, r.description
+                                "{} {} {} {} {} {}",
+                                r.name, r.path, r.tags, r.shown_status, r.stack, r.description
                             )
                             .to_lowercase()
                         };
                         for r in self
                             .rows
                             .iter()
+                            .filter(|r| !self.at_risk_only || r.at_risk)
                             .filter(|r| f.is_empty() || haystack(r).contains(&f))
                         {
                             let is_sel = self.selected.as_ref().is_some_and(|s| s.path == r.path);
@@ -465,6 +554,21 @@ impl eframe::App for App {
                             } else {
                                 ui.label(&r.status);
                             }
+                            if r.at_risk {
+                                ui.colored_label(ui.visuals().warn_fg_color, scan::git_label(r));
+                            } else {
+                                let label = scan::git_label(r);
+                                let cell = ui.label(&label);
+                                if label == "?" {
+                                    cell.on_hover_text(UNKNOWN_GIT);
+                                }
+                            }
+                            ui.label(&r.stack);
+                            ui.label(if r.clones > 0 {
+                                r.clones.to_string()
+                            } else {
+                                String::new()
+                            });
                             ui.label(&r.tags);
                             ui.label(&r.tools);
                             ui.label(r.sessions.to_string());

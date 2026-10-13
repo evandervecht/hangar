@@ -1,4 +1,5 @@
 use rusqlite::{Connection, params};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -31,10 +32,24 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
 }
 
 fn migrate(db: &Connection) -> rusqlite::Result<()> {
-    if db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? == 0 {
+    let version = db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?;
+    if version < 1 {
         // v0.1.0 stored 'active' as a default, not a choice; empty status now means "derived from activity".
         db.execute_batch(
             "UPDATE projects SET status = '' WHERE status = 'active'; PRAGMA user_version = 1;",
+        )?;
+    }
+    if version < 2 {
+        // Nullable/defaulted columns, so older Hangar versions still read this database.
+        db.execute_batch(
+            "BEGIN;
+             ALTER TABLE projects ADD COLUMN git_changed INTEGER;
+             ALTER TABLE projects ADD COLUMN git_unpushed INTEGER;
+             ALTER TABLE projects ADD COLUMN git_last_commit TEXT;
+             ALTER TABLE projects ADD COLUMN stack TEXT NOT NULL DEFAULT '';
+             CREATE TABLE IF NOT EXISTS moves(from_path TEXT PRIMARY KEY, to_path TEXT NOT NULL);
+             PRAGMA user_version = 2;
+             COMMIT;",
         )?;
     }
     Ok(())
@@ -53,6 +68,11 @@ pub fn run(
     excludes: &[String],
 ) -> rusqlite::Result<Stats> {
     let tx = db.transaction()?;
+    let moves: Vec<(String, String)> = {
+        let mut st = tx.prepare("SELECT from_path, to_path FROM moves")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?
+    };
     let mut cache = HashMap::new();
     let mut files = 0;
     for (tool, file) in log_files(home) {
@@ -77,7 +97,7 @@ pub fn run(
             continue;
         }
         tx.execute("DELETE FROM events WHERE file = ?1", [&key])?;
-        import_file(&tx, &file, &key, tool, &mut cache)?;
+        import_file(&tx, &file, &key, tool, &moves, &mut cache)?;
         tx.execute(
             "INSERT OR REPLACE INTO files(path, mtime, size) VALUES (?1, ?2, ?3)",
             params![key, mtime, size],
@@ -100,14 +120,34 @@ pub fn run(
         let name = dir
             .file_name()
             .map_or(p.clone(), |n| n.to_string_lossy().to_string());
+        if !dir.exists() {
+            // Gone: keep the last-known origin, description and git facts; they identify a moved project.
+            tx.execute(
+                "INSERT INTO projects(path, name, origin, description, missing, host, first_seen)
+                 VALUES (?1, ?2, 'no git', '', 1, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                 ON CONFLICT(path) DO UPDATE SET missing = 1",
+                params![p, name, host],
+            )?;
+            continue;
+        }
         let summary = description_file(dir)
             .map(|f| first_paragraph(&fs::read_to_string(f).unwrap_or_default()));
         // Upsert touches automatic columns only: tags/status/notes are the user's.
         tx.execute(
-            "INSERT INTO projects(path, name, origin, description, missing, host, first_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-             ON CONFLICT(path) DO UPDATE SET name = ?2, origin = ?3, description = ?4, missing = ?5, host = ?6",
-            params![p, name, origin(dir), summary.unwrap_or_default(), !dir.exists(), host],
+            "INSERT INTO projects(path, name, origin, description, missing, host, first_seen, stack)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?6)
+             ON CONFLICT(path) DO UPDATE SET name = ?2, origin = ?3, description = ?4, missing = 0, host = ?5, stack = ?6",
+            params![p, name, origin(dir), summary.unwrap_or_default(), host, stack(dir)],
+        )?;
+    }
+    let repos: Vec<&String> = projects
+        .iter()
+        .filter(|p| Path::new(p).join(".git").exists() && !excluded(p, excludes))
+        .collect();
+    for (p, (changed, unpushed, last)) in repos.iter().zip(git_health_all(&repos)) {
+        tx.execute(
+            "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_last_commit = ?4 WHERE path = ?1",
+            params![p, changed, unpushed, last],
         )?;
     }
     // Projects not seen this run (log deleted, repo removed) keep their history but get re-checked.
@@ -133,6 +173,7 @@ fn import_file(
     file: &Path,
     key: &str,
     tool: &str,
+    moves: &[(String, String)],
     cache: &mut HashMap<String, String>,
 ) -> rusqlite::Result<()> {
     let Ok(f) = fs::File::open(file) else {
@@ -158,7 +199,7 @@ fn import_file(
         };
         let project = cache
             .entry(cwd.clone())
-            .or_insert_with(|| project_root(&cwd));
+            .or_insert_with(|| project_root(&apply_moves(&normalize(&cwd), moves)));
         ins.execute(params![key, project.as_str(), tool, session, ts])?;
     }
     Ok(())
@@ -241,6 +282,20 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
             .map(|f| ("codex", f)),
     );
     logs
+}
+
+/// Rewrites a path that lies in (or is) a merged-away project to the project it was merged into.
+fn apply_moves(path: &str, moves: &[(String, String)]) -> String {
+    for (from, to) in moves {
+        if let Ok(rest) = Path::new(path).strip_prefix(from) {
+            return if rest.as_os_str().is_empty() {
+                to.clone()
+            } else {
+                Path::new(to).join(rest).to_string_lossy().to_string()
+            };
+        }
+    }
+    path.to_string()
 }
 
 /// Nearest folder containing `.git`, else the cwd itself.
@@ -432,7 +487,7 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Row {
     pub path: String,
     pub name: String,
@@ -450,6 +505,15 @@ pub struct Row {
     pub week_secs: f64,
     /// `status` if set by hand, else "active" (session in the last 14 days) or "idle".
     pub shown_status: String,
+    /// Files with uncommitted changes; None when unknown (not a repo, git failed, folder gone).
+    pub git_changed: Option<i64>,
+    /// Commits on no remote; None when unknown.
+    pub git_unpushed: Option<i64>,
+    pub git_last_commit: Option<String>,
+    pub stack: String,
+    /// Other visible projects with the same origin repo.
+    pub clones: usize,
+    pub at_risk: bool,
 }
 
 const LIST_SQL: &str = "
@@ -467,7 +531,8 @@ SELECT p.path, p.name, p.origin, p.description, p.missing, p.tags, p.status, p.n
   coalesce(a.tools, ''), coalesce(a.sessions, 0), coalesce(a.first, p.first_seen), coalesce(a.last, ''),
   coalesce(a.total, 0), coalesce(a.week, 0),
   CASE WHEN p.status <> '' THEN p.status
-       WHEN julianday(a.last) >= julianday('now', '-14 days') THEN 'active' ELSE 'idle' END
+       WHEN julianday(a.last) >= julianday('now', '-14 days') THEN 'active' ELSE 'idle' END,
+  p.git_changed, p.git_unpushed, p.git_last_commit, p.stack
 FROM projects p LEFT JOIN a ON a.project = p.path
 ORDER BY coalesce(a.last, '') DESC, p.name";
 
@@ -491,12 +556,250 @@ pub fn list(db: &Connection, excludes: &[String]) -> rusqlite::Result<Vec<Row>> 
             active_secs: r.get(12)?,
             week_secs: r.get(13)?,
             shown_status: r.get(14)?,
+            git_changed: r.get(15)?,
+            git_unpushed: r.get(16)?,
+            git_last_commit: r.get(17)?,
+            stack: r.get(18)?,
+            clones: 0,
+            at_risk: false,
         })
     })?;
-    Ok(rows
+    let mut rows: Vec<Row> = rows
         .filter_map(Result::ok)
         .filter(|r| !excluded(&r.path, excludes))
-        .collect())
+        .collect();
+    let mut per_repo: HashMap<String, usize> = HashMap::new();
+    for k in rows.iter().filter_map(|r| origin_key(&r.origin)) {
+        *per_repo.entry(k).or_default() += 1;
+    }
+    for r in &mut rows {
+        r.clones = origin_key(&r.origin).map_or(0, |k| per_repo[&k] - 1);
+        r.at_risk = at_risk(r);
+    }
+    Ok(rows)
+}
+
+/// Short git state for tables: "3 changed, 1 unpushed", "local only", "clean", "?" when unknown.
+pub fn git_label(r: &Row) -> String {
+    if r.missing {
+        return String::new();
+    }
+    if r.origin == "no git" {
+        return "no git".into();
+    }
+    let (Some(changed), Some(unpushed)) = (r.git_changed, r.git_unpushed) else {
+        return "?".into();
+    };
+    let mut parts = vec![];
+    if changed > 0 {
+        parts.push(format!("{changed} changed"));
+    }
+    if unpushed > 0 && r.origin != "local only" {
+        parts.push(format!("{unpushed} unpushed"));
+    }
+    if r.origin == "local only" {
+        parts.push("local only".into());
+    }
+    if parts.is_empty() {
+        "clean".into()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Work that exists in one place only: no git, no remote, uncommitted changes or unpushed commits.
+pub fn at_risk(r: &Row) -> bool {
+    !r.missing
+        && (r.origin == "no git"
+            || r.origin == "local only"
+            || r.git_changed.is_some_and(|n| n > 0)
+            || r.git_unpushed.is_some_and(|n| n > 0))
+}
+
+/// Same repo regardless of URL style: `git@h:a/b.git`, `https://h/a/b`, `ssh://u@h:22/a/b.git` -> `h/a/b`.
+pub fn origin_key(origin: &str) -> Option<String> {
+    let rest = if let Some((_, r)) = origin.split_once("://") {
+        let (host, path) = r.split_once('/')?;
+        let host = host.rsplit('@').next()?.split(':').next()?;
+        format!("{host}/{path}")
+    } else if let Some((user_host, path)) = origin.split_once(':') {
+        // scp-style `git@host:a/b`; anything else without a scheme isn't a remote URL.
+        if !user_host.contains('@') {
+            return None;
+        }
+        format!("{}/{path}", user_host.rsplit('@').next()?)
+    } else {
+        return None;
+    };
+    let key = rest
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_lowercase();
+    key.contains('/').then_some(key)
+}
+
+/// (changed files, unpushed commits, last commit time) per repo, in parallel: git is slow to start on Windows.
+fn git_health_all(repos: &[&String]) -> Vec<(Option<i64>, Option<i64>, Option<String>)> {
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
+    let chunk = repos.len().div_ceil(workers).max(1);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = repos
+            .chunks(chunk)
+            .map(|c| {
+                s.spawn(move || {
+                    c.iter()
+                        .map(|p| git_health(Path::new(p)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("git health worker panicked"))
+            .collect()
+    })
+}
+
+fn git_health(dir: &Path) -> (Option<i64>, Option<i64>, Option<String>) {
+    // --no-optional-locks: never take index.lock in repos an agent may be working in.
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("--no-optional-locks")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let changed = git(&["status", "--porcelain"]).map(|s| s.lines().count() as i64);
+    let unpushed =
+        git(&["rev-list", "--count", "HEAD", "--not", "--remotes"]).and_then(|s| s.parse().ok());
+    let last = git(&["log", "-1", "--format=%cI"]).filter(|s| !s.is_empty());
+    (changed, unpushed, last)
+}
+
+/// Languages and tools, from marker files in the project folder itself.
+// shortcut: only the top folder is checked, so monorepos with code in subfolders show less; recurse if that matters.
+pub fn stack(dir: &Path) -> String {
+    const MARKERS: [(&str, &str); 12] = [
+        ("Cargo.toml", "rust"),
+        ("package.json", "node"),
+        ("tsconfig.json", "typescript"),
+        ("pyproject.toml", "python"),
+        ("requirements.txt", "python"),
+        ("go.mod", "go"),
+        ("pom.xml", "java"),
+        ("build.gradle", "java"),
+        ("Gemfile", "ruby"),
+        ("composer.json", "php"),
+        ("Dockerfile", "docker"),
+        ("pubspec.yaml", "dart"),
+    ];
+    let mut found: Vec<&str> = MARKERS
+        .iter()
+        .filter(|(f, _)| dir.join(f).is_file())
+        .map(|(_, s)| *s)
+        .collect();
+    let exts: Vec<String> = fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| Some(e.path().extension()?.to_string_lossy().to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (ext, s) in [("tf", "terraform"), ("csproj", "dotnet"), ("sln", "dotnet")] {
+        if exts.iter().any(|e| e == ext) {
+            found.push(s);
+        }
+    }
+    found.dedup();
+    found.join(", ")
+}
+
+/// Merge a moved or renamed project into the one it became: history moves over, empty manual fields
+/// are filled from the old project, and future log lines from the old path land on the new one.
+pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> {
+    if from == to {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "can't merge a project into itself".into(),
+        ));
+    }
+    let tx = db.transaction()?;
+    let exists: bool =
+        tx.query_row("SELECT count(*) FROM projects WHERE path = ?1", [to], |r| {
+            r.get(0)
+        })?;
+    if !exists {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    tx.execute(
+        "UPDATE events SET project = ?2 WHERE project = ?1",
+        [from, to],
+    )?;
+    tx.execute(
+        "UPDATE projects SET
+           tags = CASE WHEN tags = '' THEN coalesce((SELECT tags FROM projects WHERE path = ?1), '') ELSE tags END,
+           status = CASE WHEN status = '' THEN coalesce((SELECT status FROM projects WHERE path = ?1), '') ELSE status END,
+           notes = CASE WHEN notes = '' THEN coalesce((SELECT notes FROM projects WHERE path = ?1), '') ELSE notes END,
+           first_seen = min(first_seen, coalesce((SELECT first_seen FROM projects WHERE path = ?1), first_seen))
+         WHERE path = ?2",
+        [from, to],
+    )?;
+    tx.execute("DELETE FROM projects WHERE path = ?1", [from])?;
+    tx.execute(
+        "UPDATE moves SET to_path = ?2 WHERE to_path = ?1",
+        [from, to],
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO moves(from_path, to_path) VALUES (?1, ?2)",
+        [from, to],
+    )?;
+    tx.commit()
+}
+
+/// RFC 4180 CSV of the rows, for spreadsheets and other tools.
+pub fn csv(rows: &[Row]) -> String {
+    let q = |s: &str| {
+        if s.contains([',', '"', '\n', '\r']) {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            s.to_string()
+        }
+    };
+    let opt = |n: Option<i64>| n.map_or(String::new(), |n| n.to_string());
+    let mut out = String::from(
+        "path,name,status,tags,notes,origin,clones,stack,git_changed,git_unpushed,git_last_commit,at_risk,missing,tools,sessions,active_hours,week_hours,first_seen,last_active,description\r\n",
+    );
+    for r in rows {
+        let fields = [
+            q(&r.path),
+            q(&r.name),
+            q(&r.shown_status),
+            q(&r.tags),
+            q(&r.notes),
+            q(&r.origin),
+            r.clones.to_string(),
+            q(&r.stack),
+            opt(r.git_changed),
+            opt(r.git_unpushed),
+            q(r.git_last_commit.as_deref().unwrap_or("")),
+            r.at_risk.to_string(),
+            r.missing.to_string(),
+            q(&r.tools),
+            r.sessions.to_string(),
+            format!("{:.2}", r.active_secs / 3600.0),
+            format!("{:.2}", r.week_secs / 3600.0),
+            q(&r.first_seen),
+            q(&r.last_active),
+            q(&r.description),
+        ];
+        out.push_str(&fields.join(","));
+        out.push_str("\r\n");
+    }
+    out
 }
 
 pub fn save_manual(db: &Connection, r: &Row) -> rusqlite::Result<()> {
@@ -627,6 +930,210 @@ mod tests {
         assert_eq!(shown["/recent"], "active");
     }
 
+    fn test_db() -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        migrate(&db).unwrap();
+        db
+    }
+
+    fn add_project(db: &Connection, path: &str, origin: &str) {
+        db.execute(
+            "INSERT INTO projects(path, name, origin, description, missing, host, first_seen) VALUES (?1,'n',?2,'',0,'h','2026-01-01')",
+            [path, origin],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migration_from_v1_adds_columns() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        db.execute_batch("PRAGMA user_version = 1;").unwrap();
+        add_project(&db, "/p", "no git");
+        migrate(&db).unwrap();
+        migrate(&db).unwrap(); // idempotent: a second launch must not fail on duplicate columns
+        let v: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+        assert_eq!(list(&db, &[]).unwrap()[0].git_changed, None);
+    }
+
+    #[test]
+    fn origin_keys_match_across_url_styles() {
+        let key = Some("github.com/acme/app".to_string());
+        for url in [
+            "git@github.com:acme/app.git",
+            "https://github.com/acme/app",
+            "https://github.com/Acme/App.git/",
+            "ssh://git@github.com:22/acme/app.git",
+            "https://user:tok@github.com/acme/app.git",
+        ] {
+            assert_eq!(origin_key(url), key, "{url}");
+        }
+        assert_eq!(origin_key("local only"), None);
+        assert_eq!(origin_key("no git"), None);
+        assert_eq!(origin_key(r"C:\repos\app.git"), None);
+    }
+
+    #[test]
+    fn clones_and_risk_are_computed() {
+        let db = test_db();
+        add_project(&db, "/a", "git@github.com:acme/app.git");
+        add_project(&db, "/b", "https://github.com/acme/app");
+        add_project(&db, "/c", "local only");
+        db.execute(
+            "UPDATE projects SET git_changed = 0, git_unpushed = 2 WHERE path = '/a'",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE projects SET git_changed = 0, git_unpushed = 0 WHERE path = '/b'",
+            [],
+        )
+        .unwrap();
+        let rows: HashMap<String, Row> = list(&db, &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.path.clone(), r))
+            .collect();
+        assert_eq!(
+            (rows["/a"].clones, rows["/b"].clones, rows["/c"].clones),
+            (1, 1, 0)
+        );
+        assert!(rows["/a"].at_risk && !rows["/b"].at_risk && rows["/c"].at_risk);
+        assert_eq!(git_label(&rows["/a"]), "2 unpushed");
+        assert_eq!(git_label(&rows["/b"]), "clean");
+        assert_eq!(git_label(&rows["/c"]), "?");
+    }
+
+    #[test]
+    fn merge_moves_history_and_aliases_old_paths() {
+        let mut db = test_db();
+        add_project(&db, "/old/app", "https://h/a/app");
+        add_project(&db, "/new/app", "https://h/a/app");
+        db.execute(
+            "UPDATE projects SET tags = 'keep', first_seen = '2025-01-01' WHERE path = '/old/app'",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO events VALUES ('f','/old/app','claude','s','2026-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        merge(&mut db, "/old/app", "/new/app").unwrap();
+        let rows = list(&db, &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].path.as_str(),
+                rows[0].tags.as_str(),
+                rows[0].sessions
+            ),
+            ("/new/app", "keep", 1)
+        );
+        assert_eq!(rows[0].first_seen, "2026-01-01T00:00:00.000Z"); // from events, which moved over
+        let moves = vec![("/old/app".to_string(), "/new/app".to_string())];
+        assert_eq!(
+            Path::new(&apply_moves("/old/app/src", &moves)),
+            Path::new("/new/app/src")
+        );
+        assert_eq!(apply_moves("/old/app", &moves), "/new/app");
+        assert_eq!(apply_moves("/old/apple", &moves), "/old/apple");
+        assert!(merge(&mut db, "/new/app", "/new/app").is_err());
+        // A later merge of the target keeps the chain pointing at the final project.
+        add_project(&db, "/final/app", "https://h/a/app");
+        merge(&mut db, "/new/app", "/final/app").unwrap();
+        let to: String = db
+            .query_row(
+                "SELECT to_path FROM moves WHERE from_path = '/old/app'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(to, "/final/app");
+    }
+
+    #[test]
+    fn csv_quotes_awkward_fields() {
+        let db = test_db();
+        add_project(&db, "/p", "no git");
+        db.execute(
+            "UPDATE projects SET notes = 'a, \"b\"' || char(10) || 'c' WHERE path = '/p'",
+            [],
+        )
+        .unwrap();
+        let out = csv(&list(&db, &[]).unwrap());
+        assert!(out.contains("\"a, \"\"b\"\"\nc\""), "{out}");
+        assert_eq!(out.matches("\r\n").count(), 2);
+    }
+
+    #[test]
+    fn missing_folder_keeps_last_known_facts() {
+        let home = std::env::temp_dir().join("hangar-missing-test");
+        let gone = home.join("gone-project");
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(&home).unwrap();
+        let mut db = test_db();
+        add_project(&db, &gone.to_string_lossy(), "https://h/a/gone");
+        db.execute(
+            "UPDATE projects SET description = 'kept' WHERE missing = 0",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO events VALUES ('f', ?1, 'claude', 's', '2026-01-01T00:00:00.000Z')",
+            [gone.to_string_lossy()],
+        )
+        .unwrap();
+        run(&mut db, &home, &[], &[]).unwrap();
+        let r = &list(&db, &[]).unwrap()[0];
+        assert!(r.missing);
+        assert_eq!(
+            (r.origin.as_str(), r.description.as_str()),
+            ("https://h/a/gone", "kept")
+        );
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn git_health_reads_a_real_repo() {
+        let dir = std::env::temp_dir().join("hangar-git-health-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-C",
+                ])
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "one"]);
+        fs::write(dir.join("b.txt"), "b").unwrap();
+        let (changed, unpushed, last) = git_health(&dir);
+        assert_eq!((changed, unpushed), (Some(1), Some(1)));
+        assert!(last.is_some());
+        assert_eq!(git_health(&dir.join("nope")), (None, None, None));
+        fs::write(dir.join("Cargo.toml"), "").unwrap();
+        fs::write(dir.join("main.tf"), "").unwrap();
+        assert_eq!(stack(&dir), "rust, terraform");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn excludes_match_whole_segments() {
         let ex = vec!["Temp".to_string(), "plugins/cache".to_string()];
@@ -695,6 +1202,7 @@ mod tests {
     fn active_time_drops_idle_gaps() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
+        migrate(&db).unwrap();
         db.execute(
             "INSERT INTO projects(path, name, origin, description, missing, host, first_seen) VALUES ('/p','p','','',0,'h','')",
             [],

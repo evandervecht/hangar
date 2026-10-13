@@ -38,6 +38,22 @@ Most projects never get a status set by hand, so Hangar derives one: *active* wh
 
 Deleting log files or project folders can't be undone from inside Hangar, and a wrong click on a list of a hundred similar names is easy. So destructive cleaners move to the Recycle Bin / Trash, deleting a folder needs its name typed, and Hangar refuses to touch your home folder, scan roots and the AI tools' own data.
 
+## Health: is the work safe?
+
+A CMDB doesn't just list what exists; it flags what's out of order. For code, the question that matters is whether the work exists anywhere else. Hangar asks git on every scan: are there uncommitted changes, commits that are on no remote, or no remote at all? Any of those, or no git at all, makes a project **at risk**: losing this disk means losing that work.
+
+Hangar runs git with `--no-optional-locks`, so it never takes the index lock in a repo where an agent is working. When git refuses a repo, usually because the folder belongs to another user, Hangar shows `?` instead of guessing. It deliberately doesn't override git's ownership check, since that check stops a foreign repo's config from running commands on your machine.
+
+## Clones are relationships
+
+The same repo checked out in several folders is one asset with several instances. Hangar keeps each checkout as its own project, because each can be in a different state (one clean, one with unpushed work), and links them through their origin. The **Clones** column and the detail panel's clone list show that relationship. URLs are compared after normalizing, so SSH and HTTPS checkouts of one repo count as clones.
+
+## Why merging a moved project is manual
+
+To Hangar, a moved folder looks like a missing project plus a new project. To git, a clone looks the same: same origin, same history. So "missing project with the same origin as an existing one" can mean *moved*, or *one clone deleted while another remains*. Merging automatically would get the second case wrong and blend two instances' histories. Hangar therefore only suggests candidates and lets you decide. Once you merge, it remembers the move, so later log lines from the old path land on the new project.
+
+The same reasoning is why a missing project keeps its last-known origin, description and git facts instead of being reset: those are what identify it later.
+
 ## Privacy
 
 Everything stays on your machine. Hangar reads the logs and writes one local SQLite file. It doesn't connect to the network, and credentials embedded in git remote URLs are stripped before they are stored.
