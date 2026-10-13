@@ -8,7 +8,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Folders scanned (4 levels deep) for git repos never opened with an AI tool.
     pub roots: Vec<String>,

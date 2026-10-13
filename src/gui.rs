@@ -28,6 +28,8 @@ struct App {
     log_days: u64,
     old_logs: Option<(Vec<PathBuf>, u64)>,
     confirm_name: String,
+    /// Copy of the config being edited in Settings; None when the window is closed.
+    settings: Option<Config>,
 }
 
 enum Action {
@@ -59,6 +61,7 @@ pub fn run(
         log_days: 90,
         old_logs: None,
         confirm_name: String::new(),
+        settings: None,
     };
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -135,6 +138,61 @@ impl App {
         self.reload();
     }
 
+    // shortcut: rescan blocks the UI for a few seconds, move to a thread with the v2 background service.
+    fn rescan(&mut self) {
+        self.message = match scan::run(
+            &mut self.db,
+            &self.home,
+            &self.cfg.roots,
+            &self.cfg.excludes,
+        ) {
+            Ok(s) => format!("imported {} log files, {} projects", s.files, s.projects),
+            Err(e) => format!("scan failed: {e}"),
+        };
+        self.reload();
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.settings.as_mut() else {
+            return;
+        };
+        let (mut save, mut cancel) = (false, false);
+        let mut open = true;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .resizable(false)
+            .min_width(600.0)
+            .show(ctx, |ui| {
+                ui.strong("Project folders");
+                ui.weak("Scanned 4 levels deep for git repos, next to the Claude Code and Codex logs.");
+                edit_list(ui, &mut draft.roots, true);
+                ui.separator();
+                ui.strong("Hidden paths");
+                ui.weak("Whole folder names (Temp) or full paths. \"Hide from Hangar\" adds to this list.");
+                edit_list(ui, &mut draft.excludes, false);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    save = ui.button("Save and rescan").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+        if save {
+            let mut cfg = self.settings.take().expect("settings open");
+            for list in [&mut cfg.roots, &mut cfg.excludes] {
+                list.iter_mut().for_each(|s| *s = s.trim().to_string());
+                list.retain(|s| !s.is_empty());
+            }
+            self.cfg = cfg;
+            if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
+                self.message = format!("settings not saved: {e}");
+                return;
+            }
+            self.rescan();
+        } else if cancel || !open {
+            self.settings = None;
+        }
+    }
+
     fn clean_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_clean;
         let missing = self.rows.iter().filter(|r| r.missing).count();
@@ -204,19 +262,13 @@ impl eframe::App for App {
                 ui.text_edit_singleline(&mut self.filter);
                 // shortcut: rescan blocks the UI for a few seconds, move to a thread with the v2 background service.
                 if ui.button("Rescan").clicked() {
-                    self.message = match scan::run(
-                        &mut self.db,
-                        &self.home,
-                        &self.cfg.roots,
-                        &self.cfg.excludes,
-                    ) {
-                        Ok(s) => format!("imported {} log files, {} projects", s.files, s.projects),
-                        Err(e) => format!("scan failed: {e}"),
-                    };
-                    self.reload();
+                    self.rescan();
                 }
                 if ui.button("Clean up").clicked() {
                     self.show_clean = !self.show_clean;
+                }
+                if ui.button("Settings").clicked() {
+                    self.settings = Some(self.cfg.clone());
                 }
                 let current = THEMES
                     .iter()
@@ -245,6 +297,10 @@ impl eframe::App for App {
         if self.show_clean {
             let ctx = ui.ctx().clone();
             self.clean_window(&ctx);
+        }
+        if self.settings.is_some() {
+            let ctx = ui.ctx().clone();
+            self.settings_window(&ctx);
         }
 
         let mut action = None;
@@ -424,6 +480,28 @@ impl eframe::App for App {
         if let Some(r) = clicked {
             self.select(r);
         }
+    }
+}
+
+/// Editable list of strings with remove buttons and an add button; `dirs` flags paths that aren't folders.
+fn edit_list(ui: &mut egui::Ui, list: &mut Vec<String>, dirs: bool) {
+    let mut remove = None;
+    for (i, item) in list.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(item).desired_width(400.0));
+            if ui.button("Remove").clicked() {
+                remove = Some(i);
+            }
+            if dirs && !item.trim().is_empty() && !Path::new(item.trim()).is_dir() {
+                ui.colored_label(ui.visuals().warn_fg_color, "folder not found");
+            }
+        });
+    }
+    if let Some(i) = remove {
+        list.remove(i);
+    }
+    if ui.button("Add").clicked() {
+        list.push(String::new());
     }
 }
 

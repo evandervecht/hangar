@@ -61,6 +61,6 @@ You get the same table as text, with full paths. Run `hangar scan` any time to i
 
 ## Where to go next
 
-- Hide temp folders and other noise: [Choose what Hangar scans](../how-to/configure-sources.md)
+- Point Hangar at your own projects folder, or hide temp folders: [Choose what Hangar scans](../how-to/configure-sources.md)
 - Remove projects you deleted: [Clean up projects and logs](../how-to/clean-up.md)
 - Understand how active time is counted: [How Hangar works](../explanation/how-hangar-works.md)

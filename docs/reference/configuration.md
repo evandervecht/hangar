@@ -17,6 +17,8 @@ Deleting `hangar.db` (with Hangar closed) rebuilds it from the logs that still e
 
 ## config.toml
 
+The **Settings** window edits `roots` and `excludes`; **Save and rescan** writes the file and scans again. The **Theme** menu writes `theme`. Changes made to the file by hand take effect on the next launch.
+
 ```toml
 roots = ['C:\Users\you\Projects']
 excludes = ["Temp", "scratchpad", "plugins/cache"]

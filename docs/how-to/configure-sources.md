@@ -1,34 +1,31 @@
 # Choose what Hangar scans
 
-## Add a folder of repos you never opened with an AI tool
+All of these can be done in **Settings** (top bar), or by editing `config.toml` in the [data folder](../reference/configuration.md#data-folder) and restarting Hangar.
 
-1. Open `config.toml` in the [data folder](../reference/configuration.md#data-folder).
-2. Add the folder to `roots`. On Windows, use single quotes so backslashes work:
-   ```toml
-   roots = ['C:\Users\you\Projects', 'D:\Code']
-   ```
-3. Click **Rescan**, or run `hangar scan`.
+## Change the main project folder
 
-Git repos up to 4 levels below each root now appear, even without any AI sessions.
+1. Click **Settings**.
+2. Under **Project folders**, type the folder path, for example `D:\Code`. A *folder not found* warning means the path doesn't exist.
+3. Click **Save and rescan**.
+
+Git repos up to 4 levels below the folder now appear, even if you never opened them with an AI tool.
+
+## Scan more than one folder
+
+In **Settings**, click **Add** under **Project folders** and type the next path. Every folder in the list is scanned.
 
 ## Use only the AI logs
 
-Set an empty list:
+In **Settings**, click **Remove** next to every project folder, then **Save and rescan**. Hangar then lists only projects from Claude Code and Codex sessions.
 
-```toml
-roots = []
-```
+Projects that were found through a removed folder stay in the list, because Hangar never drops history. Use [Clean up](clean-up.md) to forget or hide them.
 
 ## Hide a single project
 
-Select it, open **Clean** in the detail panel and click **Hide from Hangar**. Hangar adds its path to `excludes`. To bring it back, remove that line from `config.toml` and restart Hangar.
+Select it, open **Clean** in the detail panel and click **Hide from Hangar**. Its path is added to **Hidden paths** in Settings. To bring it back, click **Remove** next to that path in Settings and **Save and rescan**.
 
 ## Hide a whole kind of folder
 
-Add a folder name to `excludes`, for example worktrees or Windows' system temp folder:
+In **Settings**, click **Add** under **Hidden paths** and type a folder name, for example `SystemTemp` or `worktrees`. Then **Save and rescan**.
 
-```toml
-excludes = ["Temp", "scratchpad", "plugins/cache", "SystemTemp", "worktrees"]
-```
-
-Restart Hangar. Patterns match whole folder names, so `Temp` doesn't hide `templates`. See [Configuration](../reference/configuration.md#excludes) for the exact rules.
+Names match whole folders only, so `Temp` doesn't hide `templates`. See [Configuration](../reference/configuration.md#excludes) for the exact rules.

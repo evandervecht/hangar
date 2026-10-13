@@ -36,7 +36,7 @@
 </p>
 <p align="center">
   <!-- Stack -->
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-DEA584.svg?logo=rust&logoColor=white&style=for-the-badge">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-edition%202024-DEA584.svg?logo=rust&logoColor=white&style=for-the-badge">
   <img alt="egui" src="https://img.shields.io/badge/egui-0.36-FF5722.svg?style=for-the-badge">
   <img alt="SQLite" src="https://img.shields.io/badge/SQLite-bundled-003B57.svg?logo=sqlite&logoColor=white&style=for-the-badge">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6.svg?style=for-the-badge">
@@ -56,6 +56,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Shows the time spent:** sessions, active time (total and the last 7 days, with idle gaps over 15 minutes left out) and when the project was last active.
 - **Shows the state:** *active* or *idle* from recent activity, unless you set active / paused / archived yourself. You can also add tags and notes.
 - **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*.
+- **Settings:** choose the project folders to scan and the paths to hide, right in the app.
 - **Cleans up:** forget missing projects, hide noise, and move old AI session logs or whole project folders to the Recycle Bin / Trash.
 - **Themes:** System, Dark, Light, or Hangar (navy with the logo's coral and cyan accents).
 
