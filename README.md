@@ -1,10 +1,52 @@
 <p align="center"><img src="assets/hangar.png" width="160" alt="Hangar logo"></p>
 
-# Hangar
+<h1 align="center">Hangar</h1>
 
-[![CI](https://github.com/evandervecht/hangar/actions/workflows/ci.yml/badge.svg)](https://github.com/evandervecht/hangar/actions/workflows/ci.yml)
+<p align="center">
+  <!-- CI -->
+  <a href="https://github.com/evandervecht/hangar/actions/workflows/ci.yml">
+    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/evandervecht/hangar/ci.yml?branch=main&label=CI&style=for-the-badge">
+  </a>
+  <!-- Version -->
+  <a href="https://github.com/evandervecht/hangar/releases">
+    <img alt="Version" src="https://img.shields.io/github/v/release/evandervecht/hangar?color=673AB7&label=version&style=for-the-badge">
+  </a>
+  <!-- License -->
+  <a href="https://github.com/evandervecht/hangar/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-009688.svg?style=for-the-badge">
+  </a>
+  <!-- Docs -->
+  <a href="https://diataxis.fr/">
+    <img alt="Documentation: Diátaxis" src="https://img.shields.io/badge/docs-Di%C3%A1taxis-009485?logo=readthedocs&logoColor=white&style=for-the-badge">
+  </a>
+</p>
+<p align="center">
+  <!-- Issues -->
+  <a href="https://github.com/evandervecht/hangar/issues">
+    <img alt="GitHub Issues" src="https://img.shields.io/github/issues/evandervecht/hangar?color=F44336&style=for-the-badge">
+  </a>
+  <!-- Stars -->
+  <a href="https://github.com/evandervecht/hangar/stargazers">
+    <img alt="GitHub Stars" src="https://img.shields.io/github/stars/evandervecht/hangar?color=FFEB3B&style=for-the-badge">
+  </a>
+  <!-- Forks -->
+  <a href="https://github.com/evandervecht/hangar/network">
+    <img alt="GitHub Forks" src="https://img.shields.io/github/forks/evandervecht/hangar?color=2196F3&style=for-the-badge">
+  </a>
+</p>
+<p align="center">
+  <!-- Stack -->
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-DEA584.svg?logo=rust&logoColor=white&style=for-the-badge">
+  <img alt="egui" src="https://img.shields.io/badge/egui-0.36-FF5722.svg?style=for-the-badge">
+  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-bundled-003B57.svg?logo=sqlite&logoColor=white&style=for-the-badge">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6.svg?style=for-the-badge">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64%20%7C%20x64-000000.svg?logo=apple&logoColor=white&style=for-the-badge">
+</p>
 
 A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Codex projects live, what they are, their git origin and the time you've spent in each. It's built in Rust for Windows and macOS.
+
+<p align="center"><img src="assets/screenshot.png" alt="Hangar showing nine demo projects with status, tags, tools, active time and a detail panel"></p>
+<p align="center"><sub>Demo data, Hangar theme.</sub></p>
 
 ## What it does
 
