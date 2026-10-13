@@ -25,6 +25,9 @@ git push origin v0.2.0
 | `hangar-<tag>-x86_64-pc-windows-msvc.zip` | `hangar.exe` (with icon), README, LICENSE |
 | `hangar-<tag>-aarch64-apple-darwin.tar.gz` | `Hangar.app`, the bare `hangar` binary, README, LICENSE (Apple Silicon) |
 | `hangar-<tag>-x86_64-apple-darwin.tar.gz` | the same for Intel Macs |
+| `hangar-<tag>-x86_64-pc-windows-msvc.exe` | the bare Windows executable |
+| `hangar-<tag>-aarch64-apple-darwin` | the bare macOS binary, Apple Silicon (CLI use) |
+| `hangar-<tag>-x86_64-apple-darwin` | the bare macOS binary, Intel |
 
 ## Unsigned binaries
 
