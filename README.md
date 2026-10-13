@@ -108,8 +108,7 @@ Hangar is free and MIT-licensed. If it saves you time, you can [sponsor its deve
 
 Thank you to everyone who keeps Hangar flying.
 
-<!-- Add sponsors from the Hangar · Ground Crew, Hangar Pass and higher tiers below, one per line: [@handle](https://github.com/handle) -->
-<!-- Squadron (teams) logos go in their own row: <a href="https://company.example"><img src="assets/backers/company.png" height="40" alt="Company"></a> -->
+<!-- Add Ground Crew, Co-pilot and Hangar Pass sponsors below, one per line: [@handle](https://github.com/handle) -->
 
 *Be the first: [become a backer](https://github.com/sponsors/evandervecht?metadata_project=hangar).*
 
