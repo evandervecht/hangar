@@ -34,6 +34,12 @@ Only new/changed log files are re-imported. History is never purged.
 ## Install
 `install.ps1` (Windows) / `install.sh` (macOS, Linux): build release, copy binary, create data folder.
 
+## v0.2 additions
+- Status derived from activity (active < 14 days, else idle) unless set by hand.
+- Cleaners: forget missing projects, hide a project, trash old AI logs, trash a project folder (guarded).
+- Themes: System, Dark, Light, Hangar. App icon on the Windows exe and in a macOS `Hangar.app`.
+- Installers add Hangar to PATH. Docs follow Diátaxis.
+
 ## Deferred
 v2: tray icon + background service. Later: rendered markdown, resume session, more AI tools,
 multi-machine merge, signing/notarization, CI.

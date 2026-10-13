@@ -14,6 +14,9 @@ pub struct Config {
     pub roots: Vec<String>,
     /// Whole path segments to hide, e.g. "Temp" or "plugins/cache".
     pub excludes: Vec<String>,
+    /// "system" (default), "dark", "light" or "hangar".
+    #[serde(default)]
+    pub theme: String,
 }
 
 fn data_dir(home: &Path) -> PathBuf {
@@ -38,23 +41,29 @@ fn load_config(path: &Path, home: &Path) -> Result<Config, Box<dyn Error>> {
         excludes: ["Temp", "scratchpad", "plugins/cache"]
             .map(String::from)
             .to_vec(),
+        theme: String::new(),
     };
-    fs::write(path, toml::to_string(&cfg)?)?;
+    save_config(path, &cfg)?;
     Ok(cfg)
+}
+
+pub fn save_config(path: &Path, cfg: &Config) -> Result<(), Box<dyn Error>> {
+    Ok(fs::write(path, toml::to_string(cfg)?)?)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let home = env::home_dir().ok_or("no home directory")?;
     let dir = data_dir(&home);
     fs::create_dir_all(&dir)?;
-    let cfg = load_config(&dir.join("config.toml"), &home)?;
+    let cfg_path = dir.join("config.toml");
+    let cfg = load_config(&cfg_path, &home)?;
     let mut db = scan::open(&dir.join("hangar.db"))?;
 
     match env::args().nth(1).as_deref() {
         None => {
             let s = scan::run(&mut db, &home, &cfg.roots, &cfg.excludes)?;
             let msg = format!("imported {} log files, {} projects", s.files, s.projects);
-            gui::run(db, home, cfg, msg)?;
+            gui::run(db, home, cfg, cfg_path, msg)?;
         }
         Some("scan") => {
             let s = scan::run(&mut db, &home, &cfg.roots, &cfg.excludes)?;
@@ -79,7 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!(
                     "{:<55} {:<8} {:<13} {:>8} {:>8} {:>7} {:<16} {}",
                     name,
-                    r.status,
+                    r.shown_status,
                     r.tools,
                     r.sessions,
                     gui::hours(r.active_secs),

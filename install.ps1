@@ -15,4 +15,15 @@ $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
 $s.TargetPath = Join-Path $bin 'hangar.exe'
 $s.Save()
 
-Write-Host "Installed to $bin. Add it to PATH to use 'hangar scan' / 'hangar list'."
+# Add to the user PATH via the registry: keeps it REG_EXPAND_SZ so existing %VAR% entries survive.
+$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+$old = [string]$key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+if (($old -split ';') -notcontains $bin) {
+    $key.SetValue('Path', (@($old.TrimEnd(';'), $bin) -join ';').TrimStart(';'), 'ExpandString')
+    # Setting any user variable broadcasts the change, so new terminals see the new PATH.
+    [Environment]::SetEnvironmentVariable('HANGAR_INSTALL', $null, 'User')
+    Write-Host "Added $bin to your PATH."
+}
+$key.Close()
+
+Write-Host "Installed to $bin. Open a new terminal and run 'hangar' (window), 'hangar scan' or 'hangar list'."

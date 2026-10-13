@@ -4,30 +4,61 @@ use eframe::egui;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const STATUSES: [&str; 3] = ["active", "paused", "archived"];
+const THEMES: [(&str, &str); 4] = [
+    ("", "System"),
+    ("dark", "Dark"),
+    ("light", "Light"),
+    ("hangar", "Hangar"),
+];
+
+/// Manual statuses; "" means derived from activity.
+const STATUSES: [&str; 4] = ["", "active", "paused", "archived"];
 
 struct App {
     db: Connection,
     home: PathBuf,
     cfg: Config,
+    cfg_path: PathBuf,
     rows: Vec<Row>,
     filter: String,
     selected: Option<Row>,
     full_text: String,
     message: String,
+    show_clean: bool,
+    log_days: u64,
+    old_logs: Option<(Vec<PathBuf>, u64)>,
+    confirm_name: String,
 }
 
-pub fn run(db: Connection, home: PathBuf, cfg: Config, message: String) -> eframe::Result {
+enum Action {
+    Save,
+    Hide,
+    Forget,
+    TrashFolder,
+}
+
+pub fn run(
+    db: Connection,
+    home: PathBuf,
+    cfg: Config,
+    cfg_path: PathBuf,
+    message: String,
+) -> eframe::Result {
     let rows = scan::list(&db, &cfg.excludes).unwrap_or_default();
     let app = App {
         db,
         home,
         cfg,
+        cfg_path,
         rows,
         filter: String::new(),
         selected: None,
         full_text: String::new(),
         message,
+        show_clean: false,
+        log_days: 90,
+        old_logs: None,
+        confirm_name: String::new(),
     };
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -38,7 +69,14 @@ pub fn run(db: Connection, home: PathBuf, cfg: Config, message: String) -> efram
             ),
         ..Default::default()
     };
-    eframe::run_native("Hangar", opts, Box::new(|_| Ok(Box::new(app))))
+    eframe::run_native(
+        "Hangar",
+        opts,
+        Box::new(|cc| {
+            apply_theme(&cc.egui_ctx, &app.cfg.theme);
+            Ok(Box::new(app))
+        }),
+    )
 }
 
 impl App {
@@ -54,7 +92,107 @@ impl App {
         self.full_text = scan::description_file(Path::new(&row.path))
             .and_then(|f| std::fs::read_to_string(f).ok())
             .unwrap_or_else(|| "(no README.md, CLAUDE.md or AGENTS.md)".into());
+        self.confirm_name.clear();
         self.selected = Some(row);
+    }
+
+    fn apply(&mut self, action: Action) {
+        let Some(sel) = self.selected.clone() else {
+            return;
+        };
+        self.message = match action {
+            Action::Save => match scan::save_manual(&self.db, &sel) {
+                Ok(()) => "saved".into(),
+                Err(e) => format!("save failed: {e}"),
+            },
+            Action::Hide => {
+                self.cfg.excludes.push(sel.path.clone());
+                self.selected = None;
+                match crate::save_config(&self.cfg_path, &self.cfg) {
+                    Ok(()) => format!("hidden {} (added to excludes)", sel.path),
+                    Err(e) => format!("hidden for now, config save failed: {e}"),
+                }
+            }
+            Action::Forget => {
+                self.selected = None;
+                match scan::forget(&self.db, &sel.path) {
+                    Ok(()) => format!("forgot {}", sel.path),
+                    Err(e) => format!("forget failed: {e}"),
+                }
+            }
+            Action::TrashFolder => match trash::delete(&sel.path) {
+                Ok(()) => {
+                    self.selected = None;
+                    let _ = self.db.execute(
+                        "UPDATE projects SET missing = 1 WHERE path = ?1",
+                        [&sel.path],
+                    );
+                    format!("moved {} to the Recycle Bin / Trash", sel.path)
+                }
+                Err(e) => format!("delete failed: {e}"),
+            },
+        };
+        self.reload();
+    }
+
+    fn clean_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_clean;
+        let missing = self.rows.iter().filter(|r| r.missing).count();
+        egui::Window::new("Clean up")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.strong("Missing projects");
+                ui.label(format!(
+                    "{missing} projects whose folder is gone. Forgetting removes them and their history from Hangar."
+                ));
+                if ui
+                    .add_enabled(missing > 0, egui::Button::new("Forget all missing"))
+                    .clicked()
+                {
+                    self.message = match scan::forget_missing(&mut self.db) {
+                        Ok(n) => format!("forgot {n} missing projects"),
+                        Err(e) => format!("forget failed: {e}"),
+                    };
+                    self.selected = None;
+                    self.reload();
+                }
+
+                ui.separator();
+                ui.strong("Old AI session logs");
+                ui.horizontal(|ui| {
+                    ui.label("Not touched for");
+                    if ui
+                        .add(egui::DragValue::new(&mut self.log_days).range(7..=3650))
+                        .changed()
+                    {
+                        self.old_logs = None;
+                    }
+                    ui.label("days");
+                    if ui.button("Find").clicked() {
+                        self.old_logs = Some(scan::old_logs(&self.home, self.log_days));
+                    }
+                });
+                if let Some((files, size)) = &self.old_logs {
+                    ui.label(format!(
+                        "{} Claude/Codex log files, {:.1} MB. Hangar keeps their imported history.",
+                        files.len(),
+                        *size as f64 / 1e6
+                    ));
+                    let label = format!("Move {} files to the Recycle Bin / Trash", files.len());
+                    if ui
+                        .add_enabled(!files.is_empty(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        self.message = match scan::trash_logs(files) {
+                            Ok(n) => format!("moved {n} log files to the Recycle Bin / Trash"),
+                            Err(e) => format!("trash failed: {e}"),
+                        };
+                        self.old_logs = None;
+                    }
+                }
+            });
+        self.show_clean = open;
     }
 }
 
@@ -77,13 +215,41 @@ impl eframe::App for App {
                     };
                     self.reload();
                 }
+                if ui.button("Clean up").clicked() {
+                    self.show_clean = !self.show_clean;
+                }
+                let current = THEMES
+                    .iter()
+                    .find(|(k, _)| *k == self.cfg.theme)
+                    .map_or("System", |(_, l)| l);
+                egui::ComboBox::from_id_salt("theme")
+                    .selected_text(format!("Theme: {current}"))
+                    .show_ui(ui, |ui| {
+                        for (key, label) in THEMES {
+                            if ui
+                                .selectable_value(&mut self.cfg.theme, key.to_string(), label)
+                                .changed()
+                            {
+                                apply_theme(ui.ctx(), key);
+                                if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
+                                    self.message = format!("theme not saved: {e}");
+                                }
+                            }
+                        }
+                    });
                 ui.label(format!("{} projects", self.rows.len()));
                 ui.weak(&self.message);
             });
         });
 
+        if self.show_clean {
+            let ctx = ui.ctx().clone();
+            self.clean_window(&ctx);
+        }
+
+        let mut action = None;
         if let Some(sel) = self.selected.as_mut() {
-            let mut save = false;
+            let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
             egui::Panel::right("detail")
                 .resizable(true)
                 .default_size(450.0)
@@ -116,11 +282,13 @@ impl eframe::App for App {
                         ui.text_edit_singleline(&mut sel.tags);
                         ui.end_row();
                         ui.label("Status");
+                        let auto = format!("auto ({})", sel.shown_status);
+                        let shown = |s: &str| if s.is_empty() { auto.clone() } else { s.into() };
                         egui::ComboBox::from_id_salt("status")
-                            .selected_text(sel.status.clone())
+                            .selected_text(shown(&sel.status))
                             .show_ui(ui, |ui| {
                                 for s in STATUSES {
-                                    ui.selectable_value(&mut sel.status, s.to_string(), s);
+                                    ui.selectable_value(&mut sel.status, s.to_string(), shown(s));
                                 }
                             });
                         ui.end_row();
@@ -128,16 +296,58 @@ impl eframe::App for App {
                         ui.text_edit_multiline(&mut sel.notes);
                         ui.end_row();
                     });
-                    save = ui.button("Save").clicked();
+                    if ui.button("Save").clicked() {
+                        action = Some(Action::Save);
+                    }
+
+                    ui.collapsing("Clean", |ui| {
+                        if ui
+                            .button("Hide from Hangar")
+                            .on_hover_text("Adds this path to excludes in config.toml")
+                            .clicked()
+                        {
+                            action = Some(Action::Hide);
+                        }
+                        if ui
+                            .add_enabled(sel.missing, egui::Button::new("Forget"))
+                            .on_hover_text("Removes this project and its history from Hangar")
+                            .on_disabled_hover_text(
+                                "Only for missing projects; use Hide for existing ones",
+                            )
+                            .clicked()
+                        {
+                            action = Some(Action::Forget);
+                        }
+                        ui.separator();
+                        match guard {
+                            Some(why) => {
+                                ui.weak(format!("Folder can't be deleted: {why}."));
+                            }
+                            None => {
+                                ui.label(format!(
+                                    "Delete the folder: type \"{}\" to confirm.",
+                                    sel.name
+                                ));
+                                ui.text_edit_singleline(&mut self.confirm_name);
+                                if ui
+                                    .add_enabled(
+                                        self.confirm_name == sel.name,
+                                        egui::Button::new("Move folder to Recycle Bin / Trash"),
+                                    )
+                                    .clicked()
+                                {
+                                    action = Some(Action::TrashFolder);
+                                }
+                            }
+                        }
+                    });
+
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| ui.monospace(&self.full_text));
                 });
-            if save {
-                if let Err(e) = scan::save_manual(&self.db, sel) {
-                    self.message = format!("save failed: {e}");
-                }
-                self.reload();
-            }
+        }
+        if let Some(a) = action {
+            self.apply(a);
         }
 
         let mut clicked = None;
@@ -166,7 +376,7 @@ impl eframe::App for App {
                         let haystack = |r: &Row| {
                             format!(
                                 "{} {} {} {} {}",
-                                r.name, r.path, r.tags, r.status, r.description
+                                r.name, r.path, r.tags, r.shown_status, r.description
                             )
                             .to_lowercase()
                         };
@@ -193,7 +403,12 @@ impl eframe::App for App {
                                     .parent()
                                     .map_or(String::new(), |p| p.display().to_string()),
                             );
-                            ui.label(&r.status);
+                            // Derived statuses are dimmed so hand-set ones stand out.
+                            if r.status.is_empty() {
+                                ui.weak(&r.shown_status);
+                            } else {
+                                ui.label(&r.status);
+                            }
                             ui.label(&r.tags);
                             ui.label(&r.tools);
                             ui.label(r.sessions.to_string());
@@ -209,6 +424,33 @@ impl eframe::App for App {
         if let Some(r) = clicked {
             self.select(r);
         }
+    }
+}
+
+fn apply_theme(ctx: &egui::Context, theme: &str) {
+    use egui::{Color32, Theme, ThemePreference, Visuals};
+    ctx.set_visuals_of(Theme::Dark, Visuals::dark());
+    ctx.set_visuals_of(Theme::Light, Visuals::light());
+    match theme {
+        "dark" => ctx.set_theme(ThemePreference::Dark),
+        "light" => ctx.set_theme(ThemePreference::Light),
+        "hangar" => {
+            // Colours from the logo: navy hangar, coral and cyan accents.
+            let coral = Color32::from_rgb(0xE8, 0x7A, 0x5D);
+            let mut v = Visuals::dark();
+            v.panel_fill = Color32::from_rgb(0x14, 0x1B, 0x26);
+            v.window_fill = Color32::from_rgb(0x18, 0x21, 0x31);
+            v.extreme_bg_color = Color32::from_rgb(0x0E, 0x14, 0x1D);
+            v.faint_bg_color = Color32::from_rgb(0x1A, 0x25, 0x36);
+            v.hyperlink_color = Color32::from_rgb(0x4F, 0xC3, 0xF7);
+            v.selection.bg_fill = coral.linear_multiply(0.6);
+            v.selection.stroke.color = Color32::WHITE;
+            v.widgets.hovered.bg_stroke.color = Color32::from_rgb(0x4F, 0xC3, 0xF7);
+            v.widgets.active.bg_fill = coral;
+            ctx.set_visuals_of(Theme::Dark, v);
+            ctx.set_theme(ThemePreference::Dark);
+        }
+        _ => ctx.set_theme(ThemePreference::System),
     }
 }
 

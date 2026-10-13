@@ -46,7 +46,9 @@ jobs:
         run: Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath hangar-${{ github.ref_name }}-${{ matrix.target }}.zip
       - name: Package (macOS)
         if: runner.os == 'macOS'
-        run: tar -czf hangar-${{ github.ref_name }}-${{ matrix.target }}.tar.gz README.md LICENSE -C target/${{ matrix.target }}/release hangar
+        run: |
+          sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" .
+          tar -czf hangar-${{ github.ref_name }}-${{ matrix.target }}.tar.gz Hangar.app README.md LICENSE -C target/${{ matrix.target }}/release hangar
 
       - run: gh release upload "$GITHUB_REF_NAME" hangar-* --repo "$GITHUB_REPOSITORY" --clobber
         shell: bash

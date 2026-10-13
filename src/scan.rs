@@ -15,7 +15,7 @@ const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS projects(
   path TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, description TEXT NOT NULL,
   missing INTEGER NOT NULL, host TEXT NOT NULL, first_seen TEXT NOT NULL,
-  tags TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', notes TEXT NOT NULL DEFAULT '');
+  tags TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS events(file TEXT NOT NULL, project TEXT NOT NULL, tool TEXT NOT NULL,
   session TEXT NOT NULL, ts TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_file ON events(file);
@@ -26,7 +26,18 @@ CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open(path)?;
     db.execute_batch(SCHEMA)?;
+    migrate(&db)?;
     Ok(db)
+}
+
+fn migrate(db: &Connection) -> rusqlite::Result<()> {
+    if db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? == 0 {
+        // v0.1.0 stored 'active' as a default, not a choice; empty status now means "derived from activity".
+        db.execute_batch(
+            "UPDATE projects SET status = '' WHERE status = 'active'; PRAGMA user_version = 1;",
+        )?;
+    }
+    Ok(())
 }
 
 pub struct Stats {
@@ -44,16 +55,7 @@ pub fn run(
     let tx = db.transaction()?;
     let mut cache = HashMap::new();
     let mut files = 0;
-    let mut logs = Vec::new();
-    for dir in read_dirs(&home.join(".claude").join("projects")) {
-        logs.extend(jsonl_in(&dir).into_iter().map(|f| ("claude", f)));
-    }
-    logs.extend(
-        jsonl_tree(&home.join(".codex").join("sessions"))
-            .into_iter()
-            .map(|f| ("codex", f)),
-    );
-    for (tool, file) in logs {
+    for (tool, file) in log_files(home) {
         let Ok(meta) = fs::metadata(&file) else {
             continue;
         };
@@ -225,6 +227,20 @@ pub fn normalize(p: &str) -> String {
         s[..1].make_ascii_uppercase();
     }
     s
+}
+
+/// Every Claude Code and Codex session log under `home`, tagged with its tool.
+fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
+    let mut logs = Vec::new();
+    for dir in read_dirs(&home.join(".claude").join("projects")) {
+        logs.extend(jsonl_in(&dir).into_iter().map(|f| ("claude", f)));
+    }
+    logs.extend(
+        jsonl_tree(&home.join(".codex").join("sessions"))
+            .into_iter()
+            .map(|f| ("codex", f)),
+    );
+    logs
 }
 
 /// Nearest folder containing `.git`, else the cwd itself.
@@ -432,6 +448,8 @@ pub struct Row {
     pub last_active: String,
     pub active_secs: f64,
     pub week_secs: f64,
+    /// `status` if set by hand, else "active" (session in the last 14 days) or "idle".
+    pub shown_status: String,
 }
 
 const LIST_SQL: &str = "
@@ -447,7 +465,9 @@ a AS (
   FROM g GROUP BY project)
 SELECT p.path, p.name, p.origin, p.description, p.missing, p.tags, p.status, p.notes,
   coalesce(a.tools, ''), coalesce(a.sessions, 0), coalesce(a.first, p.first_seen), coalesce(a.last, ''),
-  coalesce(a.total, 0), coalesce(a.week, 0)
+  coalesce(a.total, 0), coalesce(a.week, 0),
+  CASE WHEN p.status <> '' THEN p.status
+       WHEN julianday(a.last) >= julianday('now', '-14 days') THEN 'active' ELSE 'idle' END
 FROM projects p LEFT JOIN a ON a.project = p.path
 ORDER BY coalesce(a.last, '') DESC, p.name";
 
@@ -470,6 +490,7 @@ pub fn list(db: &Connection, excludes: &[String]) -> rusqlite::Result<Vec<Row>> 
             last_active: r.get(11)?,
             active_secs: r.get(12)?,
             week_secs: r.get(13)?,
+            shown_status: r.get(14)?,
         })
     })?;
     Ok(rows
@@ -486,9 +507,125 @@ pub fn save_manual(db: &Connection, r: &Row) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Drop one project and its history from the database (the folder and logs are untouched).
+pub fn forget(db: &Connection, path: &str) -> rusqlite::Result<()> {
+    db.execute("DELETE FROM events WHERE project = ?1", [path])?;
+    db.execute("DELETE FROM projects WHERE path = ?1", [path])?;
+    Ok(())
+}
+
+/// Forget every project whose folder is gone. Returns how many.
+pub fn forget_missing(db: &mut Connection) -> rusqlite::Result<usize> {
+    let tx = db.transaction()?;
+    tx.execute(
+        "DELETE FROM events WHERE project IN (SELECT path FROM projects WHERE missing = 1)",
+        [],
+    )?;
+    let n = tx.execute("DELETE FROM projects WHERE missing = 1", [])?;
+    tx.commit()?;
+    Ok(n)
+}
+
+/// Session logs not modified in `days` days, with their total size in bytes.
+pub fn old_logs(home: &Path, days: u64) -> (Vec<PathBuf>, u64) {
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86400);
+    let mut size = 0;
+    let files = log_files(home)
+        .into_iter()
+        .map(|(_, f)| f)
+        .filter(|f| {
+            let Ok(m) = fs::metadata(f) else { return false };
+            let old = m.modified().is_ok_and(|t| t < cutoff);
+            if old {
+                size += m.len();
+            }
+            old
+        })
+        .collect();
+    (files, size)
+}
+
+/// Move logs to the Recycle Bin / Trash, plus Claude's `<session>/` folder (subagents, tool results) next to each.
+/// Hangar keeps the imported history, so the projects' time stays in the list.
+pub fn trash_logs(files: &[PathBuf]) -> Result<usize, trash::Error> {
+    let mut all = files.to_vec();
+    all.extend(
+        files
+            .iter()
+            .map(|f| f.with_extension(""))
+            .filter(|d| d.is_dir()),
+    );
+    trash::delete_all(&all)?;
+    Ok(files.len())
+}
+
+/// Why a project folder must not be trashed, if it mustn't: home, its parents, a scan root, or the AI tools' own data.
+pub fn delete_guard(path: &str, home: &Path, roots: &[String]) -> Option<&'static str> {
+    let p = Path::new(path);
+    if !p.is_dir() {
+        Some("folder doesn't exist")
+    } else if home.starts_with(p) || p.parent().is_none() {
+        Some("this is your home folder or one of its parents")
+    } else if roots.iter().any(|r| Path::new(r).starts_with(p)) {
+        Some("this is (a parent of) a scan root")
+    } else if p.starts_with(home.join(".claude")) || p.starts_with(home.join(".codex")) {
+        Some("this is AI tool data")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_guard_protects_home_and_roots() {
+        let home = std::env::temp_dir();
+        let root = home.join("hangar-guard-root");
+        let proj = root.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        let roots = vec![root.to_string_lossy().to_string()];
+        let s = |p: &Path| p.to_string_lossy().to_string();
+        assert!(delete_guard(&s(&home), &home, &roots).is_some());
+        assert!(delete_guard(&s(home.parent().unwrap()), &home, &roots).is_some());
+        assert!(delete_guard(&s(&root), &home, &roots).is_some());
+        assert!(delete_guard(&s(&home.join(".claude").join("x")), &home, &roots).is_some());
+        assert_eq!(delete_guard(&s(&proj), &home, &roots), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn status_migrates_and_derives() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        for (p, status) in [("/old", "active"), ("/paused", "paused")] {
+            db.execute(
+                "INSERT INTO projects(path, name, origin, description, missing, host, first_seen, status) VALUES (?1,'n','','',0,'h','',?2)",
+                [p, status],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO events VALUES ('f','/recent','claude','s',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO projects(path, name, origin, description, missing, host, first_seen) VALUES ('/recent','n','','',0,'h','')",
+            [],
+        )
+        .unwrap();
+        migrate(&db).unwrap();
+        let shown: HashMap<String, String> = list(&db, &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.path, r.shown_status))
+            .collect();
+        assert_eq!(shown["/old"], "idle");
+        assert_eq!(shown["/paused"], "paused");
+        assert_eq!(shown["/recent"], "active");
+    }
 
     #[test]
     fn excludes_match_whole_segments() {
