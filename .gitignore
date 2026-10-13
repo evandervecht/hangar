@@ -1,0 +1,21 @@
+# Rust build output (Cargo.lock stays committed: this is a binary)
+/target
+*.pdb
+
+# Local Hangar data, if ever pointed at the repo: it holds your project paths and session history
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/config.toml
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Local Claude Code settings
+.claude/settings.local.json

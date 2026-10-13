@@ -1,0 +1,54 @@
+name: Release
+
+# Push a tag like v0.1.0 to publish unsigned binaries for Windows and macOS.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: create
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath hangar-${{ github.ref_name }}-${{ matrix.target }}.zip
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: tar -czf hangar-${{ github.ref_name }}-${{ matrix.target }}.tar.gz README.md LICENSE -C target/${{ matrix.target }}/release hangar
+
+      - run: gh release upload "$GITHUB_REF_NAME" hangar-* --repo "$GITHUB_REPOSITORY" --clobber
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
