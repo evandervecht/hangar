@@ -33,6 +33,10 @@
   <a href="https://github.com/evandervecht/hangar/network">
     <img alt="GitHub Forks" src="https://img.shields.io/github/forks/evandervecht/hangar?color=2196F3&style=for-the-badge">
   </a>
+  <!-- Sponsor -->
+  <a href="https://github.com/sponsors/evandervecht">
+    <img alt="Sponsor" src="https://img.shields.io/badge/sponsor-%E2%9D%A4-EA4AAA.svg?logo=githubsponsors&logoColor=white&style=for-the-badge">
+  </a>
 </p>
 <p align="center">
   <!-- Stack -->
@@ -95,6 +99,10 @@ The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](doc
 ## Roadmap
 
 v1 scope is in [SPEC.md](SPEC.md). v2 plans: a tray icon and a background service. Later: more AI tools, merging data from several machines, and signed releases.
+
+## Support
+
+Hangar is free and MIT-licensed. If it saves you time, you can [sponsor its development on GitHub](https://github.com/sponsors/evandervecht).
 
 ## License
 
