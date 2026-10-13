@@ -108,7 +108,7 @@ Hangar is free and MIT-licensed. If it saves you time, you can [sponsor its deve
 
 Thank you to everyone who keeps Hangar flying.
 
-<!-- Add Co-pilot and Flight Lead sponsors below, one per line: [@handle](https://github.com/handle) -->
+<!-- Add Co-pilot, Flight Lead and Hangar Pass sponsors below, one per line: [@handle](https://github.com/handle) -->
 
 *Be the first: [become a backer](https://github.com/sponsors/evandervecht?metadata_project=hangar).*
 
