@@ -1,12 +1,13 @@
 # CLI
 
 ```
-hangar [scan | list [--json | --csv]]
+hangar [scan | list [--json | --csv] | --tray]
 ```
 
 | Command | Does | Output |
 |---|---|---|
-| `hangar` | scans, then opens the window | none |
+| `hangar` | opens the window and scans in the background; if Hangar already runs, shows that window instead | none |
+| `hangar --tray` | starts hidden in the tray, in background mode (used by start at login) | none |
 | `hangar scan` | imports new and changed session logs, scans the roots, refreshes project fields and git health | `imported N log files, M projects (data: <folder>)` |
 | `hangar list` | prints every visible project from the database, without scanning | a text table, newest activity first |
 | `hangar list --json` | the same rows as a JSON array | see [export fields](project-fields.md#export-fields) |

@@ -3,6 +3,8 @@ use crate::scan::{self, Row};
 use eframe::egui;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const THEMES: [(&str, &str); 4] = [
     ("", "System"),
@@ -33,6 +35,16 @@ struct App {
     confirm_name: String,
     /// Copy of the config being edited in Settings; None when the window is closed.
     settings: Option<Config>,
+    data_dir: PathBuf,
+    /// The running scan; one at a time, shared by launch, Rescan, Settings and the background timer.
+    scan: Option<JoinHandle<Result<scan::Stats, String>>>,
+    last_scan: Instant,
+    /// Started with --tray: background mode for this session even if the setting is off.
+    tray_start: bool,
+    hidden: bool,
+    quitting: bool,
+    #[cfg(any(windows, target_os = "macos"))]
+    tray: Option<tray::Tray>,
 }
 
 enum Action {
@@ -45,14 +57,16 @@ enum Action {
 }
 
 pub fn run(
-    db: Connection,
+    data_dir: PathBuf,
     home: PathBuf,
     cfg: Config,
     cfg_path: PathBuf,
-    message: String,
-) -> eframe::Result {
+    tray_start: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = scan::open(&data_dir.join("hangar.db"))?;
+    // Show the last scan's rows at once; the launch scan runs in the background.
     let rows = scan::list(&db, &cfg.excludes).unwrap_or_default();
-    let app = App {
+    let mut app = App {
         db,
         home,
         cfg,
@@ -62,13 +76,22 @@ pub fn run(
         at_risk_only: false,
         selected: None,
         full_text: String::new(),
-        message,
+        message: String::new(),
         show_clean: false,
         log_days: 90,
         old_logs: None,
         confirm_name: String::new(),
         settings: None,
+        data_dir,
+        scan: None,
+        last_scan: Instant::now(),
+        tray_start,
+        hidden: tray_start,
+        quitting: false,
+        #[cfg(any(windows, target_os = "macos"))]
+        tray: None,
     };
+    app.start_scan();
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 800.0])
@@ -85,7 +108,8 @@ pub fn run(
             apply_theme(&cc.egui_ctx, &app.cfg.theme);
             Ok(Box::new(app))
         }),
-    )
+    )?;
+    Ok(())
 }
 
 impl App {
@@ -151,18 +175,56 @@ impl App {
         self.reload();
     }
 
-    // shortcut: rescan blocks the UI for a few seconds, move to a thread with the v2 background service.
-    fn rescan(&mut self) {
-        self.message = match scan::run(
-            &mut self.db,
-            &self.home,
-            &self.cfg.roots,
-            &self.cfg.excludes,
-        ) {
+    /// Scan on a background thread with its own connection; the window keeps responding.
+    fn start_scan(&mut self) {
+        if self.scan.is_some() {
+            return;
+        }
+        let db_path = self.data_dir.join("hangar.db");
+        let (home, roots, excludes) = (
+            self.home.clone(),
+            self.cfg.roots.clone(),
+            self.cfg.excludes.clone(),
+        );
+        self.scan = Some(std::thread::spawn(move || {
+            let mut db = scan::open(&db_path).map_err(|e| e.to_string())?;
+            scan::run(&mut db, &home, &roots, &excludes).map_err(|e| e.to_string())
+        }));
+        self.last_scan = Instant::now();
+        self.message = "scanning...".into();
+    }
+
+    fn scanning(&self) -> bool {
+        self.scan.is_some()
+    }
+
+    fn poll_scan(&mut self) {
+        if !self.scan.as_ref().is_some_and(|h| h.is_finished()) {
+            return;
+        }
+        let result = self
+            .scan
+            .take()
+            .expect("checked above")
+            .join()
+            .unwrap_or_else(|_| Err("scan crashed".into()));
+        self.message = match result {
             Ok(s) => format!("imported {} log files, {} projects", s.files, s.projects),
             Err(e) => format!("scan failed: {e}"),
         };
         self.reload();
+    }
+
+    /// Keep running when the window closes, and rescan on a timer.
+    fn background(&self) -> bool {
+        self.cfg.background || self.cfg.autostart || self.tray_start
+    }
+
+    fn show(&mut self, ctx: &egui::Context) {
+        self.hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -175,6 +237,7 @@ impl App {
             .open(&mut open)
             .resizable(false)
             .min_width(600.0)
+            .enabled(!self.scan.is_some())
             .show(ctx, |ui| {
                 ui.strong("Project folders");
                 ui.weak("Scanned 4 levels deep for git repos, next to the Claude Code and Codex logs.");
@@ -183,6 +246,15 @@ impl App {
                 ui.strong("Hidden paths");
                 ui.weak("Whole folder names (Temp) or full paths. \"Hide from Hangar\" adds to this list.");
                 edit_list(ui, &mut draft.excludes, false);
+                ui.separator();
+                ui.strong("Background");
+                ui.checkbox(&mut draft.background, "Keep running in the tray when the window is closed");
+                ui.checkbox(&mut draft.autostart, "Start Hangar in the tray when I log in");
+                ui.horizontal(|ui| {
+                    ui.label("Rescan in the background every");
+                    ui.add(egui::DragValue::new(&mut draft.scan_minutes).range(1..=1440));
+                    ui.label("minutes");
+                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     save = ui.button("Save and rescan").clicked();
@@ -195,12 +267,19 @@ impl App {
                 list.iter_mut().for_each(|s| *s = s.trim().to_string());
                 list.retain(|s| !s.is_empty());
             }
+            // Starting at login only makes sense in the tray.
+            cfg.background |= cfg.autostart;
+            let autostart_changed = cfg.autostart != self.cfg.autostart;
             self.cfg = cfg;
             if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
                 self.message = format!("settings not saved: {e}");
                 return;
             }
-            self.rescan();
+            if autostart_changed && let Err(e) = crate::set_autostart(self.cfg.autostart) {
+                self.message = format!("start at login not changed: {e}");
+                return;
+            }
+            self.start_scan();
         } else if cancel || !open {
             self.settings = None;
         }
@@ -212,6 +291,7 @@ impl App {
         egui::Window::new("Clean up")
             .open(&mut open)
             .resizable(false)
+            .enabled(!self.scan.is_some())
             .show(ctx, |ui| {
                 ui.strong("Missing projects");
                 ui.label(format!(
@@ -268,16 +348,76 @@ impl App {
 }
 
 impl eframe::App for App {
+    // Runs before every frame and, while the window is hidden, on each requested repaint.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_scan();
+        let background = self.background();
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            if background && self.tray.is_none() {
+                self.tray = tray::create(ctx);
+            } else if !background {
+                self.tray = None;
+            }
+            let cmds: Vec<tray::Cmd> = self
+                .tray
+                .as_ref()
+                .map_or(vec![], |t| t.rx.try_iter().collect());
+            for cmd in cmds {
+                match cmd {
+                    tray::Cmd::Show => self.show(ctx),
+                    tray::Cmd::Rescan => self.start_scan(),
+                    tray::Cmd::Quit => {
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+        // A second `hangar` start leaves this file and exits; bring this window forward instead.
+        let request = self.data_dir.join("show-request");
+        if request.exists() {
+            let _ = std::fs::remove_file(&request);
+            self.show(ctx);
+        }
+        if background && self.last_scan.elapsed() >= Duration::from_secs(self.cfg.scan_minutes * 60)
+        {
+            self.start_scan();
+        }
+        if self.scanning() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        } else if background {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if self.hidden {
+            // --tray start, or still hidden after closing: keep the window out of sight.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && self.background() && !self.quitting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.hidden = true;
+            self.message = "Hangar keeps running in the tray".into();
+        }
+        let scanning = self.scanning();
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Filter");
                 ui.text_edit_singleline(&mut self.filter);
                 ui.checkbox(&mut self.at_risk_only, "At risk only")
                     .on_hover_text("No git, no remote, uncommitted changes or unpushed commits");
-                // shortcut: rescan blocks the UI for a few seconds, move to a thread with the v2 background service.
-                if ui.button("Rescan").clicked() {
-                    self.rescan();
+                if ui
+                    .add_enabled(!scanning, egui::Button::new("Rescan"))
+                    .clicked()
+                {
+                    self.start_scan();
+                }
+                if scanning {
+                    ui.spinner();
                 }
                 if ui.button("Clean up").clicked() {
                     self.show_clean = !self.show_clean;
@@ -347,6 +487,8 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(450.0)
                 .show(ui, |ui| {
+                    // While a scan writes, edits wait: SQLite has one writer.
+                    ui.add_enabled_ui(!scanning, |ui| {
                     ui.heading(&sel.name);
                     ui.label(&sel.path);
                     ui.label(&sel.origin);
@@ -486,6 +628,7 @@ impl eframe::App for App {
 
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| ui.monospace(&self.full_text));
+                    });
                 });
         }
         if let Some(a) = action {
@@ -606,6 +749,75 @@ fn edit_list(ui: &mut egui::Ui, list: &mut Vec<String>, dirs: bool) {
     }
     if ui.button("Add").clicked() {
         list.push(String::new());
+    }
+}
+
+/// Tray icon with Open / Rescan / Quit; Windows and macOS only (Linux would need GTK).
+#[cfg(any(windows, target_os = "macos"))]
+mod tray {
+    use eframe::egui;
+    use std::sync::mpsc::{Receiver, channel};
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+    use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+
+    pub enum Cmd {
+        Show,
+        Rescan,
+        Quit,
+    }
+
+    pub struct Tray {
+        _icon: TrayIcon,
+        pub rx: Receiver<Cmd>,
+    }
+
+    pub fn create(ctx: &egui::Context) -> Option<Tray> {
+        let menu = Menu::new();
+        let open = MenuItem::new("Open Hangar", true, None);
+        let rescan = MenuItem::new("Rescan now", true, None);
+        let quit = MenuItem::new("Quit Hangar", true, None);
+        menu.append_items(&[&open, &rescan, &quit]).ok()?;
+        let png = eframe::icon_data::from_png_bytes(include_bytes!("../assets/hangar.png")).ok()?;
+        let icon = tray_icon::Icon::from_rgba(png.rgba, png.width, png.height).ok()?;
+        let tray = TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_tooltip("Hangar")
+            .with_icon(icon)
+            .build()
+            .ok()?;
+        let (tx, rx) = channel();
+        // Handlers run outside egui; they queue a command and wake the (possibly hidden) window.
+        let (ids, menu_tx, menu_ctx) = (
+            (open.id().clone(), rescan.id().clone(), quit.id().clone()),
+            tx.clone(),
+            ctx.clone(),
+        );
+        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+            let cmd = if e.id == ids.0 {
+                Cmd::Show
+            } else if e.id == ids.1 {
+                Cmd::Rescan
+            } else if e.id == ids.2 {
+                Cmd::Quit
+            } else {
+                return;
+            };
+            let _ = menu_tx.send(cmd);
+            menu_ctx.request_repaint();
+        }));
+        let icon_ctx = ctx.clone();
+        TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = e
+            {
+                let _ = tx.send(Cmd::Show);
+                icon_ctx.request_repaint();
+            }
+        }));
+        Some(Tray { _icon: tray, rx })
     }
 }
 

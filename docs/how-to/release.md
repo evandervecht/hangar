@@ -28,6 +28,7 @@ git push origin v0.2.0
 | `hangar-<tag>-x86_64-pc-windows-msvc.exe` | the bare Windows executable |
 | `hangar-<tag>-aarch64-apple-darwin` | the bare macOS binary, Apple Silicon (CLI use) |
 | `hangar-<tag>-x86_64-apple-darwin` | the bare macOS binary, Intel |
+| `SHA256SUMS` | checksums of all the files above, see [Check a download](verify-download.md) |
 
 ## Unsigned binaries
 

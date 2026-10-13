@@ -46,8 +46,13 @@ Only new/changed log files are re-imported. History is never purged.
 - Moved projects: manual "Merge into" with path aliases so later log lines follow; missing projects keep last-known facts.
 - Stack detection from marker files. Export: `hangar list --json | --csv`.
 
+## v0.5 additions
+- Window opens at once; scans run on a background thread (WAL, busy timeout); no console window from the Start Menu.
+- Tray (Windows, macOS), close-to-tray, timed background scans, start at login (`--tray`), single instance via lock file.
+- Gemini CLI and Hermes Agent sessions. SHA256SUMS in releases.
+
 ## Deferred
-v2: tray icon + background service.
+Next: Windows installer, macOS DMG, signing/notarization. Cursor sessions once its format is verified.
 Maybe later (CMDB): cost per project across all AI tools (Claude Code, Codex, Cursor, Hermes, Gemini, …);
 change history per project; owner/client field; several machines merged offline (export/import file).
-Later: rendered markdown, resume session, more AI tools, signing/notarization.
+Later: rendered markdown, resume session, more AI tools.

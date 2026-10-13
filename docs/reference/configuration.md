@@ -57,3 +57,35 @@ Examples: `Temp` hides `…\Local\Temp\…` but not `templates`. `plugins/cache`
 | Type | string |
 | Values | `""` or missing (System), `"dark"`, `"light"`, `"hangar"` |
 | Default | System |
+
+### background
+
+| | |
+|---|---|
+| Type | `true` / `false` |
+| Default | `false` |
+| Effect | closing the window hides it to the tray, and Hangar rescans every `scan_minutes` |
+
+### autostart
+
+| | |
+|---|---|
+| Type | `true` / `false` |
+| Default | `false` |
+| Effect | start hidden in the tray at login; turns on `background`. Saving it in Settings adds or removes the login entry (see [Run Hangar in the background](../how-to/run-in-background.md#start-at-login)) |
+
+### scan_minutes
+
+| | |
+|---|---|
+| Type | whole number, 1 to 1440 |
+| Default | `15` |
+| Effect | minutes between background scans |
+
+## Other files in the data folder
+
+| File | Holds |
+|---|---|
+| `hangar.lock` | held by the running window, so only one runs per user |
+| `show-request` | left briefly by a second `hangar` start, asking the running one to show its window |
+| `hangar.log` | written only when the window fails to start |

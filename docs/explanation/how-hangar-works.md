@@ -54,6 +54,16 @@ To Hangar, a moved folder looks like a missing project plus a new project. To gi
 
 The same reasoning is why a missing project keeps its last-known origin, description and git facts instead of being reset: those are what identify it later.
 
+## Why other tools are added slowly
+
+Each AI tool stores sessions its own way, and most of those formats are internal. Gemini CLI and Hermes Agent are supported because their storage is open source or documented. Cursor is not yet: its chats live in a large internal SQLite database whose timestamp fields aren't documented, and a wrong guess would show wrong hours. Hermes' database is a live file of another program, so Hangar opens it read-only and re-reads it when it changes. A very large store makes those rescans slower.
+
+## Running in the background
+
+Hangar's "service" is the app itself, hidden in the tray, not an operating-system service. The session logs live in your home folder and belong to your login, so a per-user process that starts at login is the right owner. Only one copy runs per user: the window holds a lock file in the data folder, and a second start leaves a small request file there and exits, which makes the running copy show its window. No network sockets are involved.
+
+Scans run on a background thread with their own database connection, so the window stays responsive. Edits wait until a scan finishes, because SQLite allows one writer at a time.
+
 ## Privacy
 
 Everything stays on your machine. Hangar reads the logs and writes one local SQLite file. It doesn't connect to the network, and credentials embedded in git remote URLs are stripped before they are stored.

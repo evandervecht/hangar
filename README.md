@@ -54,7 +54,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 
 ## What it does
 
-- **Finds your projects** from the session logs Claude Code (`~/.claude/projects`) and Codex (`~/.codex/sessions`) leave behind, plus git repos under your work folders.
+- **Finds your projects** from the sessions Claude Code, Codex, Gemini CLI and Hermes Agent leave behind, plus git repos under your work folders.
 - **Shows what each one is.** The description comes from the first paragraph of `README.md`, `CLAUDE.md` or `AGENTS.md`.
 - **Shows where it lives and where it syncs to:** the path and the git origin, or "local only" / "no git".
 - **Shows the time spent:** sessions, active time (total and the last 7 days, with idle gaps over 15 minutes left out) and when the project was last active.
@@ -66,6 +66,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Exports:** `hangar list --json` or `--csv` for spreadsheets and scripts.
 - **Settings:** choose the project folders to scan and the paths to hide, right in the app.
 - **Cleans up:** forget missing projects, hide noise, and move old AI session logs or whole project folders to the Recycle Bin / Trash.
+- **Runs in the background:** optionally lives in the tray, rescans on a timer and starts at login.
 - **Themes:** System, Dark, Light, or Hangar (navy with the logo's coral and cyan accents).
 
 Everything stays on your machine. Hangar only reads the logs and writes its own local SQLite file.
@@ -97,15 +98,15 @@ hangar list --json   # or --csv, for other tools
 The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](docs/README.md).
 
 - **Tutorial:** [Getting started](docs/tutorials/getting-started.md)
-- **How-to:** [Choose what Hangar scans](docs/how-to/configure-sources.md) · [Find projects at risk](docs/how-to/find-at-risk-projects.md) · [Merge a moved project](docs/how-to/merge-a-moved-project.md) · [Export](docs/how-to/export.md) · [Clean up](docs/how-to/clean-up.md) · [Change the theme](docs/how-to/change-theme.md) · [Make a release](docs/how-to/release.md) · [Add another AI tool](docs/how-to/add-an-ai-tool.md)
-- **Reference:** [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Project fields](docs/reference/project-fields.md)
+- **How-to:** [Choose what Hangar scans](docs/how-to/configure-sources.md) · [Find projects at risk](docs/how-to/find-at-risk-projects.md) · [Merge a moved project](docs/how-to/merge-a-moved-project.md) · [Export](docs/how-to/export.md) · [Run in the background](docs/how-to/run-in-background.md) · [Check a download](docs/how-to/verify-download.md) · [Clean up](docs/how-to/clean-up.md) · [Change the theme](docs/how-to/change-theme.md) · [Make a release](docs/how-to/release.md) · [Add another AI tool](docs/how-to/add-an-ai-tool.md)
+- **Reference:** [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Project fields](docs/reference/project-fields.md) · [Sources](docs/reference/sources.md)
 - **Explanation:** [How Hangar works](docs/explanation/how-hangar-works.md)
 
 ## Roadmap
 
 Scope per version is in [SPEC.md](SPEC.md).
 
-**Next:** a tray icon and a background service.
+**Next:** a Windows installer and a macOS disk image (DMG), and signed releases.
 
 **Maybe later**, still being thought through:
 
@@ -113,7 +114,6 @@ Scope per version is in [SPEC.md](SPEC.md).
 - **Change history:** a timeline per project of what changed and when (origin, status, moves).
 - **Ownership:** an owner or client field, with hours per client.
 - **Several machines:** one view across your Mac and Windows machines without any network connection, for example by exporting a file on one machine and importing it on the other.
-- Signed and notarized releases.
 
 ## Support
 

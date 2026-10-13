@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, 
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let db = Connection::open(path)?;
+    // The window reads while a background scan writes; WAL lets both proceed, the timeout covers commits.
+    db.busy_timeout(std::time::Duration::from_secs(60))?;
+    db.pragma_update(None, "journal_mode", "WAL")?;
     db.execute_batch(SCHEMA)?;
     migrate(&db)?;
     Ok(db)
@@ -79,12 +82,18 @@ pub fn run(
         let Ok(meta) = fs::metadata(&file) else {
             continue;
         };
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs() as i64);
-        let size = meta.len() as i64;
+        let stamp = |m: &fs::Metadata| {
+            m.modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs() as i64)
+        };
+        let (mut mtime, mut size) = (stamp(&meta), meta.len() as i64);
+        // SQLite stores (Hermes) write to a -wal file first; count it, or new sessions go unseen until a checkpoint.
+        if let Ok(wal) = fs::metadata(format!("{}-wal", file.display())) {
+            mtime = mtime.max(stamp(&wal));
+            size += wal.len() as i64;
+        }
         let key = file.to_string_lossy().to_string();
         let seen: Option<(i64, i64)> = tx
             .query_row(
@@ -97,7 +106,16 @@ pub fn run(
             continue;
         }
         tx.execute("DELETE FROM events WHERE file = ?1", [&key])?;
-        import_file(&tx, &file, &key, tool, &moves, &mut cache)?;
+        if tool == "hermes" {
+            import_hermes(&tx, &file, &key, &moves, &mut cache)?;
+        } else {
+            let cwd = if tool == "gemini" {
+                gemini_cwd(&file, home)
+            } else {
+                None
+            };
+            import_file(&tx, &file, &key, tool, cwd, &moves, &mut cache)?;
+        }
         tx.execute(
             "INSERT OR REPLACE INTO files(path, mtime, size) VALUES (?1, ?2, ?3)",
             params![key, mtime, size],
@@ -173,13 +191,21 @@ fn import_file(
     file: &Path,
     key: &str,
     tool: &str,
+    gemini_cwd: Option<String>,
     moves: &[(String, String)],
     cache: &mut HashMap<String, String>,
 ) -> rusqlite::Result<()> {
     let Ok(f) = fs::File::open(file) else {
         return Ok(());
     };
+    if tool == "gemini" && gemini_cwd.is_none() {
+        return Ok(()); // project folder unknown: nothing to attribute the session to
+    }
     let mut codex = Codex::default();
+    let mut gemini = Gemini {
+        cwd: gemini_cwd.unwrap_or_default(),
+        ..Default::default()
+    };
     let mut ins = tx.prepare_cached(
         "INSERT INTO events(file, project, tool, session, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -189,10 +215,10 @@ fn import_file(
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        let ev = if tool == "claude" {
-            claude_event(&v)
-        } else {
-            codex.feed(&v)
+        let ev = match tool {
+            "claude" => claude_event(&v),
+            "gemini" => gemini.feed(&v),
+            _ => codex.feed(&v),
         };
         let Some((cwd, session, ts)) = ev else {
             continue;
@@ -203,6 +229,95 @@ fn import_file(
         ins.execute(params![key, project.as_str(), tool, session, ts])?;
     }
     Ok(())
+}
+
+/// Hermes Agent keeps sessions in SQLite (`sessions.cwd`, `messages.timestamp` in epoch seconds).
+/// Opened read-only; a locked or unreadable store is skipped, not an error.
+fn import_hermes(
+    tx: &Connection,
+    file: &Path,
+    key: &str,
+    moves: &[(String, String)],
+    cache: &mut HashMap<String, String>,
+) -> rusqlite::Result<()> {
+    use rusqlite::OpenFlags;
+    let Ok(src) = Connection::open_with_flags(
+        file,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Ok(());
+    };
+    let rows: Vec<(String, String, String)> = match src.prepare(
+        "SELECT s.id, s.cwd, strftime('%Y-%m-%dT%H:%M:%fZ', m.timestamp, 'unixepoch')
+         FROM messages m JOIN sessions s ON s.id = m.session_id
+         WHERE s.cwd IS NOT NULL AND s.cwd <> '' AND m.timestamp IS NOT NULL",
+    ) {
+        Ok(mut st) => st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map(|it| it.filter_map(Result::ok).collect())
+            .unwrap_or_default(),
+        Err(_) => return Ok(()), // schema we don't know: skip rather than fail the scan
+    };
+    let mut ins = tx.prepare_cached(
+        "INSERT INTO events(file, project, tool, session, ts) VALUES (?1, ?2, 'hermes', ?3, ?4)",
+    )?;
+    for (session, cwd, ts) in rows {
+        let project = cache
+            .entry(cwd.clone())
+            .or_insert_with(|| project_root(&apply_moves(&normalize(&cwd), moves)));
+        ins.execute(params![key, project.as_str(), session, ts])?;
+    }
+    Ok(())
+}
+
+/// Gemini CLI sessions: first line holds `sessionId` and `startTime`, message lines a `timestamp`.
+#[derive(Default)]
+struct Gemini {
+    cwd: String,
+    session: String,
+    subagent: bool,
+}
+
+impl Gemini {
+    fn feed(&mut self, v: &Value) -> Option<(String, String, String)> {
+        if let Some(id) = v["sessionId"].as_str() {
+            self.session = id.into();
+            // Subagent sessions run inside a main session; like Claude's subagent files they aren't counted.
+            self.subagent = v["kind"].as_str() == Some("subagent");
+            let start = v["startTime"].as_str()?;
+            return (!self.subagent)
+                .then(|| (self.cwd.clone(), self.session.clone(), start.into()));
+        }
+        if self.session.is_empty() || self.subagent {
+            return None;
+        }
+        Some((
+            self.cwd.clone(),
+            self.session.clone(),
+            v["timestamp"].as_str()?.into(),
+        ))
+    }
+}
+
+/// Project folder of a Gemini CLI chat file `~/.gemini/tmp/<key>/chats/session-*.jsonl`:
+/// from `<key>/.project_root`, else from `~/.gemini/projects.json` (path -> key).
+fn gemini_cwd(file: &Path, home: &Path) -> Option<String> {
+    let key_dir = file.parent()?.parent()?;
+    if let Ok(root) = fs::read_to_string(key_dir.join(".project_root")) {
+        let root = root.trim();
+        if !root.is_empty() {
+            return Some(root.to_string());
+        }
+    }
+    let key = key_dir.file_name()?.to_str()?;
+    let map: Value =
+        serde_json::from_str(&fs::read_to_string(home.join(".gemini").join("projects.json")).ok()?)
+            .ok()?;
+    map["projects"]
+        .as_object()?
+        .iter()
+        .find(|(_, v)| v.as_str() == Some(key))
+        .map(|(path, _)| path.clone())
 }
 
 /// (cwd, session, timestamp) from one Claude Code transcript line.
@@ -280,6 +395,35 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
         jsonl_tree(&home.join(".codex").join("sessions"))
             .into_iter()
             .map(|f| ("codex", f)),
+    );
+    for key_dir in read_dirs(&home.join(".gemini").join("tmp")) {
+        logs.extend(
+            jsonl_in(&key_dir.join("chats"))
+                .into_iter()
+                .map(|f| ("gemini", f)),
+        );
+    }
+    let hermes_home = std::env::var_os("HERMES_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                std::env::var_os("LOCALAPPDATA")
+                    .map_or_else(|| home.join(".hermes"), |d| PathBuf::from(d).join("hermes"))
+            } else {
+                home.join(".hermes")
+            }
+        });
+    let mut stores = vec![hermes_home.join("state.db")];
+    stores.extend(
+        read_dirs(&hermes_home.join("profiles"))
+            .into_iter()
+            .map(|d| d.join("state.db")),
+    );
+    logs.extend(
+        stores
+            .into_iter()
+            .filter(|f| f.is_file())
+            .map(|f| ("hermes", f)),
     );
     logs
 }
@@ -478,8 +622,21 @@ fn strip_credentials(url: &str) -> String {
     url.to_string()
 }
 
+/// A console program run without its own window: once the GUI has no console, Windows would open one per call.
+pub fn quiet_cmd(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn hostname() -> String {
-    std::process::Command::new("hostname")
+    quiet_cmd("hostname")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -663,7 +820,7 @@ fn git_health_all(repos: &[&String]) -> Vec<(Option<i64>, Option<i64>, Option<St
 fn git_health(dir: &Path) -> (Option<i64>, Option<i64>, Option<String>) {
     // --no-optional-locks: never take index.lock in repos an agent may be working in.
     let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
+        let out = quiet_cmd("git")
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(dir)
@@ -835,6 +992,7 @@ pub fn old_logs(home: &Path, days: u64) -> (Vec<PathBuf>, u64) {
     let mut size = 0;
     let files = log_files(home)
         .into_iter()
+        .filter(|(tool, _)| *tool != "hermes") // a live SQLite store, not a log file
         .map(|(_, f)| f)
         .filter(|f| {
             let Ok(m) = fs::metadata(f) else { return false };
@@ -1132,6 +1290,75 @@ mod tests {
         fs::write(dir.join("main.tf"), "").unwrap();
         assert_eq!(stack(&dir), "rust, terraform");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gemini_and_hermes_are_imported() {
+        let home = std::env::temp_dir().join("hangar-tools-test");
+        let _ = fs::remove_dir_all(&home);
+        let proj = home.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        let p = proj.to_string_lossy().to_string();
+        // Gemini: key dir found through projects.json, one subagent session that must be ignored.
+        let chats = home.join(".gemini").join("tmp").join("proj").join("chats");
+        fs::create_dir_all(&chats).unwrap();
+        fs::write(
+            home.join(".gemini").join("projects.json"),
+            serde_json::json!({"projects": {p.clone(): "proj"}}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            chats.join("session-2026-01-01T10-00-aaaa.jsonl"),
+            [
+                r#"{"sessionId":"g1","projectHash":"x","startTime":"2026-01-01T10:00:00.000Z","lastUpdated":"2026-01-01T10:05:00.000Z","kind":"main"}"#,
+                r#"{"id":"1","timestamp":"2026-01-01T10:01:00.000Z","type":"user","content":"hi"}"#,
+                r#"{"$set":{"summary":"x"}}"#,
+                r#"{"id":"2","timestamp":"2026-01-01T10:05:00.000Z","type":"gemini","content":"yo"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        fs::write(
+            chats.join("session-2026-01-01T11-00-bbbb.jsonl"),
+            r#"{"sessionId":"g2","startTime":"2026-01-01T11:00:00.000Z","kind":"subagent"}"#
+                .to_string()
+                + "\n"
+                + r#"{"id":"1","timestamp":"2026-01-01T11:01:00.000Z","type":"user"}"#,
+        )
+        .unwrap();
+        // Hermes: documented sessions/messages tables, epoch seconds.
+        let hermes = home.join("hermes");
+        fs::create_dir_all(&hermes).unwrap();
+        let h = Connection::open(hermes.join("state.db")).unwrap();
+        h.execute_batch(
+            "CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT, started_at REAL, cwd TEXT);
+             CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, timestamp REAL);
+             INSERT INTO messages(session_id, role, timestamp) VALUES ('h1','user',1767261600.0),('h1','assistant',1767261660.0),('h2','user',1767261600.0);",
+        )
+        .unwrap();
+        h.execute("INSERT INTO sessions VALUES ('h1','cli',1767261600.0,?1),('h2','gateway',1767261600.0,NULL)", [&p]).unwrap();
+        drop(h);
+        // SAFETY: test-only; HERMES_HOME is read by log_files and no other test sets it.
+        unsafe { std::env::set_var("HERMES_HOME", &hermes) };
+        let mut db = test_db();
+        run(&mut db, &home, &[], &[]).unwrap();
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let r = &list(&db, &[]).unwrap()[0];
+        assert_eq!(r.path, normalize(&p));
+        assert_eq!(
+            (r.tools.as_str(), r.sessions),
+            ("gemini,hermes", 2),
+            "{}",
+            r.tools
+        );
+        assert!((r.active_secs - 360.0).abs() < 0.01, "{}", r.active_secs); // 5 min Gemini + 1 min Hermes
+        // The log cleaner leaves the Hermes database alone.
+        let (old, _) = old_logs(&home, 0);
+        assert!(
+            old.iter()
+                .all(|f| f.extension().is_some_and(|e| e == "jsonl"))
+        );
+        fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]

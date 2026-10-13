@@ -57,3 +57,17 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: SHA256SUMS for every release file
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'hangar-*' --dir assets
+          cd assets && sha256sum hangar-* > SHA256SUMS && cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

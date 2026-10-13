@@ -11,7 +11,7 @@
 | Stack | automatic | see [Stack](#stack) |
 | Clones | automatic | how many other visible projects have the same origin repo; empty when none |
 | Tags | manual | free text |
-| Tools | automatic | AI tools with sessions here: `claude`, `codex` |
+| Tools | automatic | AI tools with sessions here: `claude`, `codex`, `gemini`, `hermes` |
 | Sessions | automatic | number of distinct sessions |
 | Active | automatic | total active time, in hours |
 | 7 days | automatic | active time in the last 7 days |
@@ -37,7 +37,7 @@ Read on every scan with `git status`, `git rev-list` and `git log`, for projects
 | Value | Meaning |
 |---|---|
 | `clean` | nothing uncommitted, every commit is on a remote |
-| `N changed` | N files with uncommitted changes (including untracked files) |
+| `N changed` | N entries in `git status`: changed or untracked files (an untracked folder counts once) |
 | `N unpushed` | N commits that are on no remote branch |
 | `local only` | a repo without an `origin` remote |
 | `no git` | not a git repo |
