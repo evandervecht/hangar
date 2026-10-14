@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "providers": {
+    "codex": {
+      "enabled": true
+    },
+    "claude": {
+      "enabled": true
+    }
+  },
+  "repo": {
+    "aliases": {
+      "remotes": [],
+      "slugs": []
+    }
+  },
+  "badge": {
+    "label": "AI burn",
+    "mode": "combined",
+    "style": "for-the-badge",
+    "color": "#E8A515",
+    "colorZero": "lightgrey",
+    "cacheSeconds": 300
+  },
+  "publish": {
+    "provider": "github-gist",
+    "gistId": "ad77ae3a0ab3345c8cee308b53ffd371",
+    "badgeUrl": "https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fevandervecht%2Fad77ae3a0ab3345c8cee308b53ffd371%2Fraw%2Fagent-badge.json&cacheSeconds=300&style=for-the-badge"
+  },
+  "refresh": {
+    "prePush": {
+      "enabled": true,
+      "mode": "fail-soft"
+    }
+  },
+  "privacy": {
+    "aggregateOnly": true,
+    "output": "standard"
+  }
+}

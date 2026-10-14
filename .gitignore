@@ -19,3 +19,9 @@ desktop.ini
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# agent-badge:gitignore:start
+.agent-badge/state.json
+.agent-badge/cache/
+.agent-badge/logs/
+# agent-badge:gitignore:end

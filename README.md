@@ -35,6 +35,13 @@
     <img alt="Reads Hermes Agent" src="https://img.shields.io/badge/reads-Hermes%20Agent-4B5563?style=for-the-badge">
   </a>
 </p>
+<div align="center">
+
+<!-- agent-badge:start -->
+[![AI burn](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fevandervecht%2Fad77ae3a0ab3345c8cee308b53ffd371%2Fraw%2Fagent-badge.json&cacheSeconds=300&style=for-the-badge)](https://github.com/arlegotin/agent-badge)
+<!-- agent-badge:end -->
+
+</div>
 <p align="center">
   <!-- Issues -->
   <a href="https://github.com/evandervecht/hangar/issues">
