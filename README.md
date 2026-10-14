@@ -63,6 +63,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Links clones:** every checkout of the same repo is counted and listed, whatever the URL style.
 - **Detects the stack:** rust, node, python, go, terraform and more, from the files in each project.
 - **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*. If it moved, merge it into its new location and keep its history.
+- **Shows Claude's scratchpads:** the temporary folders Claude Code works in fold out under their project, like folders in Explorer or Finder.
 - **Exports:** `hangar list --json` or `--csv` for spreadsheets and scripts.
 - **Settings:** choose the project folders to scan and the paths to hide, right in the app.
 - **Cleans up:** forget missing projects, hide noise, and move old AI session logs or whole project folders to the Recycle Bin / Trash.
@@ -106,7 +107,7 @@ The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](doc
 
 Scope per version is in [SPEC.md](SPEC.md).
 
-**Next:** a Windows installer and signed releases.
+**Next:** a Windows installer, and macOS releases signed and notarized by Apple (waiting on the developer account).
 
 **Maybe later**, still being thought through:
 

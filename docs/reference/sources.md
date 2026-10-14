@@ -9,6 +9,7 @@ Where Hangar finds sessions, and what it reads from each. Folders that don't exi
 | Gemini CLI | `~/.gemini/tmp/<project>/chats/*.jsonl` | `sessionId` and `startTime` on the first line, `timestamp` on messages; the folder comes from `<project>/.project_root` or `~/.gemini/projects.json`; subagent sessions are skipped |
 | Hermes Agent | `$HERMES_HOME/state.db`, default `~/.hermes` (Windows: `%LOCALAPPDATA%\hermes`), plus `profiles/*/state.db` | SQLite, opened read-only: `sessions.id`, `sessions.cwd`, `messages.timestamp` (epoch seconds); sessions without a cwd are skipped |
 | Root folders | `roots` in `config.toml` | git repos up to 4 levels deep |
+| Claude Code scratchpads | `<temp>/claude/*/<session id>/scratchpad` | folder listing only, read on each reload; see [Scratchpads](project-fields.md#scratchpads) |
 
 Not supported yet: Cursor (its chat storage is internal and its timestamp fields aren't documented), GitHub Copilot CLI, OpenCode and Aider. See [Add another AI tool](../how-to/add-an-ai-tool.md).
 

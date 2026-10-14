@@ -18,6 +18,20 @@
 | Last active (UTC) | automatic | time of the most recent log line |
 | Description | automatic | first paragraph of `README.md`, else `CLAUDE.md`, else `AGENTS.md` |
 
+## Scratchpads
+
+A project with Claude Code scratchpads gets a **▸** before its name. Click it to fold out one sub-row per scratchpad, newest first:
+
+| Column | Meaning |
+|---|---|
+| Project | `↳ scratchpad <first 8 characters of the session id>`; click to open the folder |
+| Location | the session folder the scratchpad is in |
+| Status | always *temp* |
+| Last active (UTC) | newest change among the files and folders directly inside it |
+| Description | how many files and folders are directly inside it |
+
+Hangar looks in `<temp>/claude/<project>/<session id>/scratchpad` (on Windows `%TEMP%\claude\...`). The session id links each scratchpad to the project that session ran in. Empty scratchpads, and those of sessions Hangar never imported, are left out. Scratchpads are only shown, never stored: when Claude Code or the OS clears the temp folder, they disappear from Hangar too.
+
 The detail panel also shows the full path, origin, first-seen date, last commit date, the other clones, notes and the full description file.
 
 ## Status

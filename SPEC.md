@@ -51,8 +51,14 @@ Only new/changed log files are re-imported. History is never purged.
 - Tray (Windows, macOS), close-to-tray, timed background scans, start at login (`--tray`), single instance via lock file.
 - Gemini CLI and Hermes Agent sessions. SHA256SUMS in releases.
 
+## v0.6 additions
+- Activity stored per session per day (schema 3) instead of per log line; "7 days" = today and the 6 days before (UTC).
+- Release files `hangar-<version>-windows-amd64.{exe,zip}` and `hangar-<version>-darwin-{arm64,amd64}.tar.gz`
+  (ad-hoc signed `Hangar.app`).
+
 ## Deferred
-Next: Windows installer, macOS DMG, signing/notarization. Cursor sessions once its format is verified.
+Next: Windows installer; Developer ID signing and notarization for macOS (waiting on the Apple Developer account).
+Cursor sessions once its format is verified.
 Maybe later (CMDB): cost per project across all AI tools (Claude Code, Codex, Cursor, Hermes, Gemini, …);
 change history per project; owner/client field; several machines merged offline (export/import file).
 Later: rendered markdown, resume session, more AI tools.

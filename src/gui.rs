@@ -1,7 +1,8 @@
 use crate::Config;
-use crate::scan::{self, Row};
+use crate::scan::{self, Row, Scratchpad};
 use eframe::egui;
 use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -24,6 +25,9 @@ struct App {
     cfg: Config,
     cfg_path: PathBuf,
     rows: Vec<Row>,
+    /// Claude Code scratchpads per project path, shown as sub-rows of expanded projects.
+    scratch: HashMap<String, Vec<Scratchpad>>,
+    expanded: HashSet<String>,
     filter: String,
     at_risk_only: bool,
     selected: Option<Row>,
@@ -67,14 +71,14 @@ pub fn run(
     tray_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db = scan::open(&data_dir.join("hangar.db"))?;
-    // Show the last scan's rows at once; the launch scan runs in the background.
-    let rows = scan::list(&db, &cfg.excludes).unwrap_or_default();
     let mut app = App {
         db,
         home,
         cfg,
         cfg_path,
-        rows,
+        rows: Vec::new(),
+        scratch: HashMap::new(),
+        expanded: HashSet::new(),
         filter: String::new(),
         at_risk_only: false,
         selected: None,
@@ -96,6 +100,8 @@ pub fn run(
         #[cfg(any(windows, target_os = "macos"))]
         tray_failed: false,
     };
+    // Show the last scan's rows at once; the launch scan runs in the background.
+    app.reload();
     app.start_scan();
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -124,6 +130,7 @@ impl App {
             Ok(rows) => self.rows = rows,
             Err(e) => self.message = format!("load failed: {e}"),
         }
+        self.scratch = scan::scratchpads(&self.db, &std::env::temp_dir());
     }
 
     fn select(&mut self, row: Row) {
@@ -488,6 +495,7 @@ impl eframe::App for App {
 
         let mut action = None;
         let mut clicked = None;
+        let mut toggle: Option<String> = None;
         if let Some(sel) = self.selected.as_mut() {
             let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
             let key = scan::origin_key(&sel.origin);
@@ -707,13 +715,33 @@ impl eframe::App for App {
                             } else {
                                 r.name.clone()
                             };
-                            if ui
-                                .selectable_label(is_sel, name)
-                                .on_hover_text(&r.path)
-                                .clicked()
-                            {
-                                clicked = Some(r.clone());
-                            }
+                            let pads = self.scratch.get(&r.path);
+                            let open_now = self.expanded.contains(&r.path);
+                            ui.horizontal(|ui| {
+                                match pads {
+                                    Some(p) => {
+                                        let arrow = if open_now { "▾" } else { "▸" };
+                                        if ui
+                                            .small_button(arrow)
+                                            .on_hover_text(format!(
+                                                "{} Claude scratchpads",
+                                                p.len()
+                                            ))
+                                            .clicked()
+                                        {
+                                            toggle = Some(r.path.clone());
+                                        }
+                                    }
+                                    None => ui.add_space(ui.spacing().interact_size.y + 2.0),
+                                }
+                                if ui
+                                    .selectable_label(is_sel, name)
+                                    .on_hover_text(&r.path)
+                                    .clicked()
+                                {
+                                    clicked = Some(r.clone());
+                                }
+                            });
                             ui.label(
                                 Path::new(&r.path)
                                     .parent()
@@ -748,12 +776,40 @@ impl eframe::App for App {
                             ui.label(r.last_active.get(..16).unwrap_or("").replace('T', " "));
                             ui.label(r.description.chars().take(120).collect::<String>());
                             ui.end_row();
+                            for p in pads.filter(|_| open_now).into_iter().flatten() {
+                                let short = p.session.get(..8).unwrap_or(&p.session);
+                                let path = p.path.display().to_string();
+                                if ui
+                                    .link(format!("      ↳ scratchpad {short}"))
+                                    .on_hover_text(format!("Open {path}"))
+                                    .clicked()
+                                {
+                                    open(&path);
+                                }
+                                ui.weak(
+                                    p.path
+                                        .parent()
+                                        .map_or(String::new(), |d| d.display().to_string()),
+                                );
+                                ui.weak("temp");
+                                for _ in 0..8 {
+                                    ui.label("");
+                                }
+                                ui.weak(&p.modified);
+                                ui.weak(format!("{} items", p.items));
+                                ui.end_row();
+                            }
                         }
                     });
             });
         });
         if let Some(r) = clicked {
             self.select(r);
+        }
+        if let Some(p) = toggle
+            && !self.expanded.remove(&p)
+        {
+            self.expanded.insert(p);
         }
     }
 }

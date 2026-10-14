@@ -1037,6 +1037,81 @@ pub fn save_manual(db: &Connection, r: &Row) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// A non-empty Claude Code scratchpad: `<temp>/claude/<encoded cwd>/<session id>/scratchpad`.
+#[derive(Clone)]
+pub struct Scratchpad {
+    pub path: PathBuf,
+    pub session: String,
+    /// Files and folders directly inside it.
+    pub items: u64,
+    /// Newest change among those, UTC "YYYY-MM-DD HH:MM".
+    pub modified: String,
+}
+
+/// Scratchpads per project path, newest first. The session id in the folder name links each one to
+/// the project that session ran in, so it follows merges and moves like the session does.
+/// shortcut: a scratchpad whose session Hangar never imported is left out; match the encoded
+/// folder name against project paths if that turns out to matter.
+pub fn scratchpads(db: &Connection, temp: &Path) -> HashMap<String, Vec<Scratchpad>> {
+    let mut out: HashMap<String, Vec<Scratchpad>> = HashMap::new();
+    let dirs = |p: &Path| -> Vec<PathBuf> {
+        fs::read_dir(p)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for cwd in dirs(&temp.join("claude")) {
+        for session_dir in dirs(&cwd) {
+            let path = session_dir.join("scratchpad");
+            // Top level only: a scratchpad can hold tens of thousands of files (a cloned repo,
+            // node_modules) and this runs on the UI thread.
+            let (mut items, mut newest) = (0, 0);
+            for e in fs::read_dir(&path).into_iter().flatten().flatten() {
+                items += 1;
+                let t = e.metadata().and_then(|m| m.modified()).ok();
+                let t = t.and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+                newest = newest.max(t.map_or(0, |d| d.as_secs() as i64));
+            }
+            if items == 0 {
+                continue;
+            }
+            let session = session_dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let Ok(project) = db.query_row(
+                "SELECT project FROM activity WHERE tool = 'claude' AND session = ?1 LIMIT 1",
+                [&session],
+                |r| r.get::<_, String>(0),
+            ) else {
+                continue;
+            };
+            let modified = db
+                .query_row(
+                    "SELECT strftime('%Y-%m-%d %H:%M', ?1, 'unixepoch')",
+                    [newest],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            out.entry(project).or_default().push(Scratchpad {
+                path,
+                session,
+                items,
+                modified,
+            });
+        }
+    }
+    for pads in out.values_mut() {
+        pads.sort_by(|a, b| b.modified.cmp(&a.modified));
+    }
+    out
+}
+
 /// Drop these projects and their history from the database (folders and logs are untouched).
 /// The caller passes the exact paths it showed, so hidden projects are never caught along.
 pub fn forget(db: &mut Connection, paths: &[String]) -> rusqlite::Result<usize> {
@@ -1313,6 +1388,39 @@ mod tests {
         let out = csv(&list(&db, &[]).unwrap());
         assert!(out.contains("\"'=HYPERLINK(\"\"x\"\")\""), "{out}");
         assert!(out.contains(",'@a,") && out.contains(",'-1+2\r\n"), "{out}");
+    }
+
+    #[test]
+    fn scratchpads_attach_to_their_session_project() {
+        let temp = std::env::temp_dir().join("hangar-scratch-test");
+        let _ = fs::remove_dir_all(&temp);
+        let pad = temp
+            .join("claude")
+            .join("C--p")
+            .join("s1")
+            .join("scratchpad");
+        fs::create_dir_all(pad.join("sub")).unwrap();
+        fs::write(pad.join("sub").join("a.txt"), "hello").unwrap();
+        fs::create_dir_all(
+            temp.join("claude")
+                .join("C--p")
+                .join("s2")
+                .join("scratchpad"),
+        )
+        .unwrap(); // empty: left out
+        let db = test_db();
+        db.execute(
+            "INSERT INTO lines VALUES ('f', '/p', 'claude', 's1', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        fold(&db, "lines").unwrap();
+        let found = scratchpads(&db, &temp);
+        let pads = &found["/p"];
+        assert_eq!(pads.len(), 1);
+        assert_eq!((pads[0].session.as_str(), pads[0].items), ("s1", 1));
+        assert_eq!(pads[0].modified.len(), 16);
+        fs::remove_dir_all(&temp).unwrap();
     }
 
     #[test]
