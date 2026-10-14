@@ -14,6 +14,13 @@ Lines that aren't valid JSON or lack the fields Hangar needs are skipped. That k
 
 A session runs in a working folder, which is often a subfolder of a repo. Hangar walks up from that folder to the nearest one containing `.git` and calls that the project. Without git anywhere above it, the working folder itself is the project.
 
+The agent can change folders during a session, for example to clone a repo into a scratch folder and work in it. Hangar then looks at the folder the session started in:
+
+- A plain subfolder (`src`, `scripts`) counts toward the start folder, so it doesn't become a project of its own.
+- A git repo inside a start folder that isn't one (a clone in a scratch or workspace folder) keeps its own row and time. A repo nested in that repo (a submodule, vendored code) counts toward it.
+- If the start folder lies in a repo, everything inside it counts toward that repo.
+- A folder outside the start folder is its own project again, as above.
+
 So a session in `my-app/src` counts toward `my-app`, and two clones of the same repo are two projects. That's intended: they live in different places and can be in different states, which is exactly what a CMDB tracks. The Location column tells them apart.
 
 Paths are normalized to their real on-disk spelling first, so `c:\code\app\` from a log and `C:\Code\app` from the root scan become one project.

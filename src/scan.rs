@@ -58,7 +58,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(LINES)
 }
 
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 fn migrate(db: &Connection) -> rusqlite::Result<()> {
     let version = |db: &Connection| db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0));
@@ -94,6 +94,16 @@ fn migrate(db: &Connection) -> rusqlite::Result<()> {
                  ALTER TABLE projects ADD COLUMN git_last_commit TEXT;
                  ALTER TABLE projects ADD COLUMN stack TEXT NOT NULL DEFAULT '';
                  CREATE TABLE IF NOT EXISTS moves(from_path TEXT PRIMARY KEY, to_path TEXT NOT NULL);",
+            )?;
+        }
+        if v < 4 {
+            // Subfolders a session cd'ed into now count toward its start folder (session_project):
+            // import those logs again on the next scan. Logs with no history left belong to forgotten
+            // projects, which must not come back.
+            // shortcut: a log that also fed a forgotten project brings that part back; rare, Forget it again.
+            db.execute(
+                "DELETE FROM files WHERE path IN (SELECT file FROM activity)",
+                [],
             )?;
         }
         let converted = has_events(db)?;
@@ -244,6 +254,15 @@ pub fn run(
     let all: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
     drop(st);
     for p in all {
+        // No sessions, not found under a root, nothing typed by hand, folder still there: a leftover
+        // (e.g. a subfolder that older versions counted as its own project). Gone folders stay, flagged missing.
+        if projects.binary_search(&p).is_err() && Path::new(&p).exists() {
+            tx.execute(
+                "DELETE FROM projects WHERE path = ?1 AND tags = '' AND status = '' AND notes = ''
+                   AND NOT EXISTS (SELECT 1 FROM activity WHERE project = ?1)",
+                [&p],
+            )?;
+        }
         tx.execute(
             "UPDATE projects SET missing = ?2 WHERE path = ?1",
             params![p, !Path::new(&p).exists()],
@@ -264,7 +283,7 @@ fn import_file(
     tool: &str,
     gemini_cwd: Option<String>,
     moves: &[(String, String)],
-    cache: &mut HashMap<String, String>,
+    cache: &mut HashMap<String, (String, String)>,
 ) -> rusqlite::Result<()> {
     let Ok(f) = fs::File::open(file) else {
         return Ok(());
@@ -280,6 +299,9 @@ fn import_file(
     let mut ins = tx.prepare_cached(
         "INSERT INTO lines(file, project, tool, session, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
+    // Folder and project each session started in; see session_project.
+    let mut starts: HashMap<String, (String, String)> = HashMap::new();
+    let mut resolved: HashMap<(String, String), String> = HashMap::new();
     for line in BufReader::new(f).lines() {
         // Unparseable lines (partial writes, unknown shapes) are skipped.
         let Ok(line) = line else { continue };
@@ -294,9 +316,13 @@ fn import_file(
         let Some((cwd, session, ts)) = ev else {
             continue;
         };
-        let project = cache
-            .entry(cwd.clone())
-            .or_insert_with(|| project_root(&apply_moves(&normalize(&cwd), moves)));
+        let (dir, root) = locate(&cwd, moves, cache);
+        let start = starts
+            .entry(session.clone())
+            .or_insert_with(|| (dir.clone(), root.clone()));
+        let project = resolved
+            .entry((start.0.clone(), dir.clone()))
+            .or_insert_with(|| session_project(&dir, &root, start));
         ins.execute(params![key, project.as_str(), tool, session, ts])?;
     }
     Ok(())
@@ -309,7 +335,7 @@ fn import_hermes(
     file: &Path,
     key: &str,
     moves: &[(String, String)],
-    cache: &mut HashMap<String, String>,
+    cache: &mut HashMap<String, (String, String)>,
 ) -> rusqlite::Result<()> {
     use rusqlite::OpenFlags;
     let Ok(src) = Connection::open_with_flags(
@@ -333,12 +359,50 @@ fn import_hermes(
         "INSERT INTO lines(file, project, tool, session, ts) VALUES (?1, ?2, 'hermes', ?3, ?4)",
     )?;
     for (session, cwd, ts) in rows {
-        let project = cache
-            .entry(cwd.clone())
-            .or_insert_with(|| project_root(&apply_moves(&normalize(&cwd), moves)));
-        ins.execute(params![key, project.as_str(), session, ts])?;
+        let (_, project) = locate(&cwd, moves, cache);
+        ins.execute(params![key, project, session, ts])?;
     }
     Ok(())
+}
+
+/// (folder, project) of a logged cwd: the folder in one spelling with merges applied, and the
+/// nearest git repo around it. Cached per cwd: both touch the filesystem.
+fn locate(
+    cwd: &str,
+    moves: &[(String, String)],
+    cache: &mut HashMap<String, (String, String)>,
+) -> (String, String) {
+    cache
+        .entry(cwd.to_string())
+        .or_insert_with(|| {
+            let dir = apply_moves(&normalize(cwd), moves);
+            let root = project_root(&dir);
+            (dir, root)
+        })
+        .clone()
+}
+
+/// Project of a log line in folder `dir` (whose own repo is `root`), for a session started in
+/// `start` (folder, project). Inside the start folder, plain subfolders (src, scripts) count toward
+/// the start, and so does everything when the start lies in a repo. A repo inside a start folder
+/// that isn't one (a clone in a scratch or workspace folder) keeps its own time; repos nested in it
+/// (submodules, vendored code) count toward it. Outside the start folder, `dir`'s own repo.
+fn session_project(dir: &str, root: &str, start: &(String, String)) -> String {
+    let (folder, start_root) = (Path::new(&start.0), &start.1);
+    let Ok(rest) = Path::new(dir).strip_prefix(folder) else {
+        return root.to_string();
+    };
+    if Path::new(start_root).join(".git").exists() {
+        return start_root.clone();
+    }
+    let mut p = folder.to_path_buf();
+    for c in rest.components() {
+        p.push(c);
+        if p.join(".git").exists() {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    start_root.clone()
 }
 
 /// Gemini CLI sessions: first line holds `sessionId` and `startTime`, message lines a `timestamp`.
@@ -621,7 +685,7 @@ pub fn first_paragraph(md: &str) -> String {
         let skip = in_code
             || t.starts_with("```")
             || t.is_empty()
-            || ["#", "![", "[!", "<", "|", "---"]
+            || ["#", "![", "[!", "[<", "<", "|", "---"]
                 .iter()
                 .any(|p| t.starts_with(p));
         if skip {
@@ -1280,6 +1344,27 @@ mod tests {
     }
 
     #[test]
+    fn migration_to_v4_reimports_only_logs_with_history() {
+        let db = test_db();
+        db.execute_batch(
+            "PRAGMA user_version = 3;
+             INSERT INTO files VALUES ('kept', 1, 1), ('forgotten', 1, 1);
+             INSERT INTO lines VALUES ('kept','/p','claude','s','2026-01-01T00:00:00.000Z');",
+        )
+        .unwrap();
+        fold(&db, "lines").unwrap();
+        migrate(&db).unwrap();
+        let left: Vec<String> = db
+            .prepare("SELECT path FROM files")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, ["forgotten"]);
+    }
+
+    #[test]
     fn origin_keys_match_across_url_styles() {
         let key = Some("github.com/acme/app".to_string());
         for url in [
@@ -1468,6 +1553,71 @@ mod tests {
     }
 
     #[test]
+    fn sessions_count_toward_their_start_folder() {
+        let home = std::env::temp_dir().join("hangar-start-test");
+        let _ = fs::remove_dir_all(&home);
+        let scratch = home.join("temp3");
+        let notes = scratch.join("notes");
+        let clone = scratch.join("BitNet");
+        let nested = clone.join("3rdparty").join("llama");
+        let other = home.join("other");
+        for d in [&clone, &nested, &other] {
+            fs::create_dir_all(d.join(".git")).unwrap();
+        }
+        fs::create_dir_all(&notes).unwrap();
+        let logs = home.join(".claude").join("projects").join("temp3");
+        fs::create_dir_all(&logs).unwrap();
+        let line = |cwd: &Path, ts: &str| {
+            serde_json::json!({"cwd": cwd.to_string_lossy(), "sessionId": "s", "timestamp": ts})
+                .to_string()
+        };
+        // Started in a scratch folder: a plain subfolder, a clone, a repo nested in the clone,
+        // then a repo outside the start folder.
+        fs::write(
+            logs.join("s.jsonl"),
+            [
+                line(&scratch, "2026-01-01T10:00:00.000Z"),
+                line(&notes, "2026-01-01T10:02:00.000Z"),
+                line(&clone, "2026-01-01T10:05:00.000Z"),
+                line(&nested, "2026-01-01T10:07:00.000Z"),
+                line(&other, "2026-01-01T10:08:00.000Z"),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut db = test_db();
+        let n = |p: &Path| normalize(&p.to_string_lossy());
+        // What older versions left behind: every folder as a project of its own.
+        for p in [&notes, &nested] {
+            add_project(&db, &n(p), "no git");
+        }
+        run(&mut db, &home, &home.join(".hermes"), &[], &[]).unwrap();
+        let rows: HashMap<String, Row> = list(&db, &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.path.clone(), r))
+            .collect();
+        let mut paths: Vec<&String> = rows.keys().collect();
+        paths.sort();
+        let mut want = [n(&scratch), n(&clone), n(&other)];
+        want.sort();
+        assert_eq!(paths, want.iter().collect::<Vec<_>>());
+        assert!((rows[&n(&scratch)].active_secs - 120.0).abs() < 0.01);
+        assert!((rows[&n(&clone)].active_secs - 300.0).abs() < 0.01);
+        assert_eq!(rows[&n(&other)].sessions, 1);
+        // A leftover with something typed by hand is kept.
+        add_project(&db, &n(&notes), "no git");
+        db.execute(
+            "UPDATE projects SET notes = 'mine' WHERE path = ?1",
+            [n(&notes)],
+        )
+        .unwrap();
+        run(&mut db, &home, &home.join(".hermes"), &[], &[]).unwrap();
+        assert!(list(&db, &[]).unwrap().iter().any(|r| r.path == n(&notes)));
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
     fn missing_folder_keeps_last_known_facts() {
         let home = std::env::temp_dir().join("hangar-missing-test");
         let gone = home.join("gone-project");
@@ -1629,6 +1779,11 @@ mod tests {
         let md = "---\nname: x\n---\n# Title\n![badge](x)\n\nThe real\ndescription.\n\nMore.";
         assert_eq!(first_paragraph(md), "The real description.");
         assert_eq!(first_paragraph("```\ncode\n```\nText"), "Text");
+        // An image wrapped in a link (a banner) is not prose.
+        assert_eq!(
+            first_paragraph("[<img src=\"x.png\" width=800>](https://h)\n\nText"),
+            "Text"
+        );
         assert_eq!(
             first_paragraph(
                 "**Fast.** A [CLI](https://example.com) for [Foo](https://foo.example) `v2` [sic]."
