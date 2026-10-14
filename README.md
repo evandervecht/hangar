@@ -21,6 +21,21 @@
   </a>
 </p>
 <p align="center">
+  <!-- AI agents whose sessions Hangar reads; see docs/reference/sources.md -->
+  <a href="docs/reference/sources.md">
+    <img alt="Reads Claude Code" src="https://img.shields.io/badge/reads-Claude%20Code-D97757?logo=claude&logoColor=white&style=for-the-badge">
+  </a>
+  <a href="docs/reference/sources.md">
+    <img alt="Reads Codex" src="https://img.shields.io/badge/reads-Codex-000000?style=for-the-badge">
+  </a>
+  <a href="docs/reference/sources.md">
+    <img alt="Reads Gemini CLI" src="https://img.shields.io/badge/reads-Gemini%20CLI-8E75B2?logo=googlegemini&logoColor=white&style=for-the-badge">
+  </a>
+  <a href="docs/reference/sources.md">
+    <img alt="Reads Hermes Agent" src="https://img.shields.io/badge/reads-Hermes%20Agent-4B5563?style=for-the-badge">
+  </a>
+</p>
+<p align="center">
   <!-- Issues -->
   <a href="https://github.com/evandervecht/hangar/issues">
     <img alt="GitHub Issues" src="https://img.shields.io/github/issues/evandervecht/hangar?color=F44336&style=for-the-badge">
