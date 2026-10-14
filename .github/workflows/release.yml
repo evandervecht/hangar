@@ -56,6 +56,7 @@ jobs:
           $name = "hangar-$($env:GITHUB_REF_NAME.TrimStart('v'))-windows-${{ matrix.arch }}"
           Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath "$name.zip"
           Copy-Item target/${{ matrix.target }}/release/hangar.exe "$name.exe"
+          ./packaging/windows-installer.ps1 target/${{ matrix.target }}/release/hangar.exe $env:GITHUB_REF_NAME.TrimStart('v') .
       - name: Package (macOS)
         if: runner.os == 'macOS'
         # hangar-<version>-darwin-<arch>.tar.gz holding Hangar.app; tar keeps the signature and permissions.
