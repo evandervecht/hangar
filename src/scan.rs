@@ -472,16 +472,7 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
                 .map(|f| ("gemini", f)),
         );
     }
-    let hermes_home = std::env::var_os("HERMES_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(windows) {
-                std::env::var_os("LOCALAPPDATA")
-                    .map_or_else(|| home.join(".hermes"), |d| PathBuf::from(d).join("hermes"))
-            } else {
-                home.join(".hermes")
-            }
-        });
+    let hermes_home = hermes_home(home);
     let mut stores = vec![hermes_home.join("state.db")];
     stores.extend(
         read_dirs(&hermes_home.join("profiles"))
@@ -495,6 +486,20 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
             .map(|f| ("hermes", f)),
     );
     logs
+}
+
+/// Where Hermes Agent keeps its data: `HERMES_HOME`, else `%LOCALAPPDATA%\hermes` or `~/.hermes`.
+fn hermes_home(home: &Path) -> PathBuf {
+    std::env::var_os("HERMES_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                std::env::var_os("LOCALAPPDATA")
+                    .map_or_else(|| home.join(".hermes"), |d| PathBuf::from(d).join("hermes"))
+            } else {
+                home.join(".hermes")
+            }
+        })
 }
 
 /// Rewrites a path that lies in (or is) a merged-away project to the project it was merged into.
@@ -883,9 +888,11 @@ fn git_health_all(repos: &[&String]) -> Vec<(Option<i64>, Option<i64>, Option<St
 
 fn git_health(dir: &Path) -> (Option<i64>, Option<i64>, Option<String>) {
     // --no-optional-locks: never take index.lock in repos an agent may be working in.
+    // core.fsmonitor off: a repo's own config (e.g. from an unzipped archive) could name any program to run.
+    // shortcut: clean/process filters from repo config can still run during status; fine while repos are your own.
     let git = |args: &[&str]| {
         let out = quiet_cmd("git")
-            .arg("--no-optional-locks")
+            .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -942,11 +949,9 @@ pub fn stack(dir: &Path) -> String {
 
 /// Merge a moved or renamed project into the one it became: history moves over, empty manual fields
 /// are filled from the old project, and future log lines from the old path land on the new one.
-pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> {
+pub fn merge(db: &mut Connection, from: &str, to: &str) -> Result<(), Box<dyn std::error::Error>> {
     if from == to {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "can't merge a project into itself".into(),
-        ));
+        return Err("can't merge a project into itself".into());
     }
     let tx = db.transaction()?;
     let exists: bool =
@@ -954,7 +959,7 @@ pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> 
             r.get(0)
         })?;
     if !exists {
-        return Err(rusqlite::Error::QueryReturnedNoRows);
+        return Err(format!("{to} is not a known project").into());
     }
     tx.execute(
         "UPDATE activity SET project = ?2 WHERE project = ?1",
@@ -978,7 +983,7 @@ pub fn merge(db: &mut Connection, from: &str, to: &str) -> rusqlite::Result<()> 
         "INSERT OR REPLACE INTO moves(from_path, to_path) VALUES (?1, ?2)",
         [from, to],
     )?;
-    tx.commit()
+    Ok(tx.commit()?)
 }
 
 /// RFC 4180 CSV of the rows, for spreadsheets and other tools.
@@ -1054,18 +1059,8 @@ pub struct Scratchpad {
 /// folder name against project paths if that turns out to matter.
 pub fn scratchpads(db: &Connection, temp: &Path) -> HashMap<String, Vec<Scratchpad>> {
     let mut out: HashMap<String, Vec<Scratchpad>> = HashMap::new();
-    let dirs = |p: &Path| -> Vec<PathBuf> {
-        fs::read_dir(p)
-            .map(|rd| {
-                rd.flatten()
-                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-                    .map(|e| e.path())
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    for cwd in dirs(&temp.join("claude")) {
-        for session_dir in dirs(&cwd) {
+    for cwd in read_dirs(&temp.join("claude")) {
+        for session_dir in read_dirs(&cwd) {
             let path = session_dir.join("scratchpad");
             // Top level only: a scratchpad can hold tens of thousands of files (a cloned repo,
             // node_modules) and this runs on the UI thread.
@@ -1160,15 +1155,24 @@ pub fn trash_logs(files: &[PathBuf]) -> Result<usize, trash::Error> {
 }
 
 /// Why a project folder must not be trashed, if it mustn't: home, its parents, a scan root, or the AI tools' own data.
+/// Every path is normalized first: a root typed as `c:\projects` must still protect `C:\Projects`.
 pub fn delete_guard(path: &str, home: &Path, roots: &[String]) -> Option<&'static str> {
-    let p = Path::new(path);
+    let n = |p: &Path| PathBuf::from(normalize(&p.to_string_lossy()));
+    let (p, home) = (n(Path::new(path)), n(home));
+    // The same tool folders log_files reads.
+    let tool_data = [
+        home.join(".claude"),
+        home.join(".codex"),
+        home.join(".gemini"),
+        n(&hermes_home(&home)),
+    ];
     if !p.is_dir() {
         Some("folder doesn't exist")
-    } else if home.starts_with(p) || p.parent().is_none() {
+    } else if home.starts_with(&p) || p.parent().is_none() {
         Some("this is your home folder or one of its parents")
-    } else if roots.iter().any(|r| Path::new(r).starts_with(p)) {
+    } else if roots.iter().any(|r| n(Path::new(r)).starts_with(&p)) {
         Some("this is (a parent of) a scan root")
-    } else if p.starts_with(home.join(".claude")) || p.starts_with(home.join(".codex")) {
+    } else if tool_data.iter().any(|d| p.starts_with(d)) {
         Some("this is AI tool data")
     } else {
         None
@@ -1191,8 +1195,17 @@ mod tests {
         assert!(delete_guard(&s(home.parent().unwrap()), &home, &roots).is_some());
         assert!(delete_guard(&s(&root), &home, &roots).is_some());
         assert!(delete_guard(&s(&home.join(".claude").join("x")), &home, &roots).is_some());
+        let gemini = home.join(".gemini").join("x");
+        fs::create_dir_all(&gemini).unwrap();
+        assert!(delete_guard(&s(&gemini), &home, &roots).is_some());
+        if cfg!(windows) {
+            // A root typed in another case still protects the folder.
+            let lower = vec![s(&root).to_lowercase()];
+            assert!(delete_guard(&s(&root), &home, &lower).is_some());
+        }
         assert_eq!(delete_guard(&s(&proj), &home, &roots), None);
         fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&gemini).unwrap();
     }
 
     #[test]

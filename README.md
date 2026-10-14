@@ -91,6 +91,8 @@ Everything stays on your machine. Hangar only reads the logs and writes its own 
 
 **Download:** from [Releases](https://github.com/evandervecht/hangar/releases), grab `hangar-<version>-windows-amd64.exe` (or the zip) on Windows. On macOS, grab `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `darwin-amd64` (Intel), double-click it and drag **Hangar** to **Applications**. The builds are unsigned; see [Make a release](docs/how-to/release.md#unsigned-binaries) for the first-launch step.
 
+> **Signing is in progress.** Signed and notarized macOS builds come once Apple approves the developer account; until then macOS and Windows ask you to confirm the first launch.
+
 **From source:** you need a [Rust toolchain](https://rustup.rs).
 
 ```sh
@@ -115,7 +117,7 @@ The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](doc
 
 - **Tutorial:** [Getting started](docs/tutorials/getting-started.md)
 - **How-to:** [Choose what Hangar scans](docs/how-to/configure-sources.md) · [Find projects at risk](docs/how-to/find-at-risk-projects.md) · [Merge a moved project](docs/how-to/merge-a-moved-project.md) · [Export](docs/how-to/export.md) · [Run in the background](docs/how-to/run-in-background.md) · [Check a download](docs/how-to/verify-download.md) · [Clean up](docs/how-to/clean-up.md) · [Change the theme](docs/how-to/change-theme.md) · [Make a release](docs/how-to/release.md) · [Add another AI tool](docs/how-to/add-an-ai-tool.md)
-- **Reference:** [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Project fields](docs/reference/project-fields.md) · [Sources](docs/reference/sources.md)
+- **Reference:** [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Project fields](docs/reference/project-fields.md) · [Sources](docs/reference/sources.md) · [Stability](docs/reference/stability.md)
 - **Explanation:** [How Hangar works](docs/explanation/how-hangar-works.md)
 
 ## Roadmap

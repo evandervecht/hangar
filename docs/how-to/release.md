@@ -30,7 +30,7 @@ git push origin v0.2.0
 
 ## Unsigned binaries
 
-The binaries are not signed yet.
+The binaries are not signed yet. Signing is in progress: macOS builds will be signed and notarized once Apple approves the developer account.
 
 - **macOS:** after dragging Hangar to Applications, open it once; macOS blocks it. Go to **System Settings → Privacy & Security** and click **Open Anyway**. Or run `xattr -dr com.apple.quarantine /Applications/Hangar.app`.
 - **macOS says "Hangar is damaged and can't be opened":** that's a downloaded app without a valid signature (releases up to v0.5.0 weren't signed at all). Run `xattr -dr com.apple.quarantine /Applications/Hangar.app` once.
