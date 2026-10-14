@@ -1474,7 +1474,12 @@ mod tests {
         fold(&db, "lines").unwrap();
         db.execute("DELETE FROM lines", []).unwrap();
         run(&mut db, &home, &[], &[]).unwrap();
-        let r = &list(&db, &[]).unwrap()[0];
+        // By path: gemini_and_hermes_are_imported may set HERMES_HOME while this runs.
+        let rows = list(&db, &[]).unwrap();
+        let r = rows
+            .iter()
+            .find(|r| r.path == gone.to_string_lossy())
+            .unwrap();
         assert!(r.missing);
         assert_eq!(
             (r.origin.as_str(), r.description.as_str()),
