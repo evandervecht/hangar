@@ -8,6 +8,7 @@
    cargo clippy --all-targets -- -D warnings
    cargo test
    ```
+   To try the Windows installer too: `./packaging/windows-installer.ps1 target/release/hangar.exe <version> target/installer` (needs Inno Setup 6: `winget install JRSoftware.InnoSetup`).
 2. Open the app with `cargo run --release` and switch through every theme in the **Theme** menu. Check that the table, the detail panel and the **Clean up** window are readable in each.
 3. Bump `version` in `Cargo.toml`, run `cargo build` so `Cargo.lock` follows, and commit.
 
@@ -25,6 +26,7 @@ git push origin v0.2.0
 | `hangar-<version>-windows-amd64.zip` | `hangar.exe` (with icon), README, LICENSE (`<version>` is the tag without the `v`) |
 | `hangar-<version>-darwin-arm64.tar.gz` | `Hangar.app` for Apple Silicon |
 | `hangar-<version>-darwin-amd64.tar.gz` | `Hangar.app` for Intel Macs |
+| `hangar-<version>-windows-amd64-setup.exe` | the Windows installer, built from `packaging/windows-installer.iss` with Inno Setup |
 | `hangar-<version>-windows-amd64.exe` | the bare Windows executable |
 | `SHA256SUMS` | checksums of all the files above, see [Check a download](verify-download.md) |
 
@@ -35,4 +37,4 @@ The binaries are not signed yet. Signing is in progress: macOS builds will be si
 - **macOS:** after dragging Hangar to Applications, open it once; macOS blocks it. Go to **System Settings → Privacy & Security** and click **Open Anyway**. Or run `xattr -dr com.apple.quarantine /Applications/Hangar.app`.
 - **macOS says "Hangar is damaged and can't be opened":** that's a downloaded app without a valid signature (releases up to v0.5.0 weren't signed at all). Run `xattr -dr com.apple.quarantine /Applications/Hangar.app` once.
 - **macOS command line:** the CLI is inside the app: `/Applications/Hangar.app/Contents/MacOS/hangar list`. To type just `hangar`, run `ln -s /Applications/Hangar.app/Contents/MacOS/hangar /usr/local/bin/hangar` (or into any folder on your PATH).
-- **Windows:** SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
+- **Windows:** SmartScreen may warn when you run the setup or the bare `.exe`. Choose **More info** → **Run anyway**.

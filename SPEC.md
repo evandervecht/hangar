@@ -56,8 +56,14 @@ Only new/changed log files are re-imported. History is never purged.
 - Release files `hangar-<version>-windows-amd64.{exe,zip}` and `hangar-<version>-darwin-{arm64,amd64}.tar.gz`
   (ad-hoc signed `Hangar.app`).
 
+## Next release (unreleased)
+- Windows installer (`hangar-<version>-windows-amd64-setup.exe`, Inno Setup): per user, no admin, same folder as `install.ps1`,
+  Start Menu shortcut, optional PATH entry and desktop shortcut. Uninstall removes PATH and login entries and asks
+  before deleting the data folder.
+- `hangar --version` / `--help`; stability promise for 1.0 in `docs/reference/stability.md`.
+
 ## Deferred
-Next: Windows installer; Developer ID signing and notarization for macOS (waiting on the Apple Developer account).
+Next: Developer ID signing and notarization for macOS (waiting on the Apple Developer account).
 Cursor sessions once its format is verified.
 Maybe later (CMDB): cost per project across all AI tools (Claude Code, Codex, Cursor, Hermes, Gemini, …);
 change history per project; owner/client field; several machines merged offline (export/import file).

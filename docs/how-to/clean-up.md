@@ -32,3 +32,9 @@ This moves Claude Code transcripts (with their subagent and tool-result folders)
 The project stays in Hangar, marked *(missing)*, until you forget it.
 
 Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), and the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder). Paths are compared after resolving their real spelling, so a root typed in another case still counts.
+
+## Uninstall Hangar (Windows)
+
+Open **Settings → Apps → Installed apps**, find **Hangar** and choose **Uninstall**. It closes Hangar if it runs, and removes the program, its shortcuts, its PATH entry and its start-at-login entry.
+
+It then asks whether to delete your Hangar data (`%APPDATA%\hangar`: projects, tags, notes and settings). The default is **No**, so a later install picks up where you left off. Your projects and AI session logs are never touched.

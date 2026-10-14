@@ -89,7 +89,7 @@ Everything stays on your machine. Hangar only reads the logs and writes its own 
 
 ## Install
 
-**Download:** from [Releases](https://github.com/evandervecht/hangar/releases), grab `hangar-<version>-windows-amd64.exe` (or the zip) on Windows. On macOS, grab `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `darwin-amd64` (Intel), double-click it and drag **Hangar** to **Applications**. The builds are unsigned; see [Make a release](docs/how-to/release.md#unsigned-binaries) for the first-launch step.
+**Download:** from [Releases](https://github.com/evandervecht/hangar/releases), run `hangar-<version>-windows-amd64-setup.exe` on Windows: it installs for your user only (no admin rights), adds a Start Menu shortcut and puts `hangar` on your PATH. The bare `.exe` and the zip are there too, if you'd rather not install. On macOS, grab `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `darwin-amd64` (Intel), double-click it and drag **Hangar** to **Applications**. The builds are unsigned; see [Make a release](docs/how-to/release.md#unsigned-binaries) for the first-launch step.
 
 > **Signing is in progress.** Signed and notarized macOS builds come once Apple approves the developer account; until then macOS and Windows ask you to confirm the first launch.
 
@@ -124,7 +124,7 @@ The docs follow [Diátaxis](https://diataxis.fr/); start at [docs/README.md](doc
 
 Scope per version is in [SPEC.md](SPEC.md).
 
-**Next:** a Windows installer, and macOS releases signed and notarized by Apple (waiting on the developer account).
+**Next:** macOS releases signed and notarized by Apple (waiting on the developer account), and a signed Windows installer.
 
 **Maybe later**, still being thought through:
 
