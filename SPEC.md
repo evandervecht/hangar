@@ -56,7 +56,7 @@ Only new/changed log files are re-imported. History is never purged.
 - Release files `hangar-<version>-windows-amd64.{exe,zip}` and `hangar-<version>-darwin-{arm64,amd64}.tar.gz`
   (ad-hoc signed `Hangar.app`).
 
-## Next release (unreleased)
+## v0.7 additions
 - Windows installer (`hangar-<version>-windows-amd64-setup.exe`, Inno Setup): per user, no admin, same folder as `install.ps1`,
   Start Menu shortcut, optional PATH entry and desktop shortcut. Uninstall removes PATH and login entries and asks
   before deleting the data folder.
