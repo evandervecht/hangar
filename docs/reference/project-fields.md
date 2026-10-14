@@ -101,7 +101,7 @@ Unknown git values are `null` in JSON and empty in CSV.
 
 ## Database
 
-`hangar.db` is SQLite, schema version 3 (`PRAGMA user_version`).
+`hangar.db` is SQLite, schema version 4 (`PRAGMA user_version`).
 
 | Table | Columns |
 |---|---|
@@ -109,5 +109,7 @@ Unknown git values are `null` in JSON and empty in CSV.
 | `activity` | `file`, `project`, `tool`, `session`, `day`, `first`, `last`, `secs` (one row per session per UTC day; `secs` is active time with idle gaps left out) |
 | `files` | `path` (key), `mtime`, `size` (one row per imported log file) |
 | `moves` | `from_path` (key), `to_path` (one row per merged project) |
+
+Schema 4 changes no tables: it makes the next scan import every log that still has history again, so sessions follow the start-folder rule in [How Hangar works](../explanation/how-hangar-works.md). Leftover subfolder projects without sessions or anything you typed are removed. Logs of projects you forgot stay skipped.
 
 Schema 3 replaced the v0.5 `events` table (one row per log line) with `activity`. Opening a database with v0.6 converts it once and shrinks the file; an older Hangar opened afterwards shows no sessions until you upgrade again.

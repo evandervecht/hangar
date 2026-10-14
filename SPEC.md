@@ -16,7 +16,7 @@ Rust, one binary, Windows + macOS (Linux works too). Personal use, unsigned loca
 - Excludes (`config.toml`, whole path segments): `Temp`, `scratchpad`, `plugins/cache`.
 
 ## Project identity
-Nearest parent folder containing `.git`, else the session cwd. Folder gone → flagged **missing**, never deleted.
+Nearest parent folder containing `.git`, else the session cwd. Subfolders a session moves into count toward the folder it started in, except a git repo inside a non-repo start folder, which keeps its own time (schema 4). Folder gone → flagged **missing**, never deleted.
 
 ## Record
 - Automatic: path, name, description, origin (URL / "local only" / "no git"), tools used, session count,
