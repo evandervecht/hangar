@@ -131,9 +131,11 @@ pub struct Stats {
 }
 
 /// Import new/changed logs, scan roots, refresh automatic project fields.
+/// `hermes` is Hermes Agent's folder, normally `hermes_home(home)`.
 pub fn run(
     db: &mut Connection,
     home: &Path,
+    hermes: &Path,
     roots: &[String],
     excludes: &[String],
 ) -> rusqlite::Result<Stats> {
@@ -145,7 +147,7 @@ pub fn run(
     };
     let mut cache = HashMap::new();
     let mut files = 0;
-    for (tool, file) in log_files(home) {
+    for (tool, file) in log_files(home, hermes) {
         let Ok(meta) = fs::metadata(&file) else {
             continue;
         };
@@ -455,7 +457,7 @@ pub fn normalize(p: &str) -> String {
 }
 
 /// Every Claude Code and Codex session log under `home`, tagged with its tool.
-fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
+fn log_files(home: &Path, hermes_home: &Path) -> Vec<(&'static str, PathBuf)> {
     let mut logs = Vec::new();
     for dir in read_dirs(&home.join(".claude").join("projects")) {
         logs.extend(jsonl_in(&dir).into_iter().map(|f| ("claude", f)));
@@ -472,7 +474,6 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
                 .map(|f| ("gemini", f)),
         );
     }
-    let hermes_home = hermes_home(home);
     let mut stores = vec![hermes_home.join("state.db")];
     stores.extend(
         read_dirs(&hermes_home.join("profiles"))
@@ -489,7 +490,7 @@ fn log_files(home: &Path) -> Vec<(&'static str, PathBuf)> {
 }
 
 /// Where Hermes Agent keeps its data: `HERMES_HOME`, else `%LOCALAPPDATA%\hermes` or `~/.hermes`.
-fn hermes_home(home: &Path) -> PathBuf {
+pub fn hermes_home(home: &Path) -> PathBuf {
     std::env::var_os("HERMES_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -1121,10 +1122,10 @@ pub fn forget(db: &mut Connection, paths: &[String]) -> rusqlite::Result<usize> 
 }
 
 /// Session logs not modified in `days` days, with their total size in bytes.
-pub fn old_logs(home: &Path, days: u64) -> (Vec<PathBuf>, u64) {
+pub fn old_logs(home: &Path, hermes: &Path, days: u64) -> (Vec<PathBuf>, u64) {
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86400);
     let mut size = 0;
-    let files = log_files(home)
+    let files = log_files(home, hermes)
         .into_iter()
         .filter(|(tool, _)| *tool != "hermes") // a live SQLite store, not a log file
         .map(|(_, f)| f)
@@ -1486,8 +1487,7 @@ mod tests {
         .unwrap();
         fold(&db, "lines").unwrap();
         db.execute("DELETE FROM lines", []).unwrap();
-        run(&mut db, &home, &[], &[]).unwrap();
-        // By path: gemini_and_hermes_are_imported may set HERMES_HOME while this runs.
+        run(&mut db, &home, &home.join(".hermes"), &[], &[]).unwrap();
         let rows = list(&db, &[]).unwrap();
         let r = rows
             .iter()
@@ -1583,11 +1583,8 @@ mod tests {
         .unwrap();
         h.execute("INSERT INTO sessions VALUES ('h1','cli',1767261600.0,?1),('h2','gateway',1767261600.0,NULL)", [&p]).unwrap();
         drop(h);
-        // SAFETY: test-only; HERMES_HOME is read by log_files and no other test sets it.
-        unsafe { std::env::set_var("HERMES_HOME", &hermes) };
         let mut db = test_db();
-        run(&mut db, &home, &[], &[]).unwrap();
-        unsafe { std::env::remove_var("HERMES_HOME") };
+        run(&mut db, &home, &hermes, &[], &[]).unwrap();
         let r = &list(&db, &[]).unwrap()[0];
         assert_eq!(r.path, normalize(&p));
         assert_eq!(
@@ -1598,7 +1595,7 @@ mod tests {
         );
         assert!((r.active_secs - 360.0).abs() < 0.01, "{}", r.active_secs); // 5 min Gemini + 1 min Hermes
         // The log cleaner leaves the Hermes database alone.
-        let (old, _) = old_logs(&home, 0);
+        let (old, _) = old_logs(&home, &hermes, 0);
         assert!(
             old.iter()
                 .all(|f| f.extension().is_some_and(|e| e == "jsonl"))

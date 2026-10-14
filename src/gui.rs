@@ -204,7 +204,8 @@ impl App {
         );
         self.scan = Some(std::thread::spawn(move || {
             let mut db = scan::open(&db_path).map_err(|e| e.to_string())?;
-            scan::run(&mut db, &home, &roots, &excludes).map_err(|e| e.to_string())
+            scan::run(&mut db, &home, &scan::hermes_home(&home), &roots, &excludes)
+                .map_err(|e| e.to_string())
         }));
         self.last_scan = Instant::now();
         self.message = "scanning...".into();
@@ -357,7 +358,11 @@ impl App {
                     }
                     ui.label("days");
                     if ui.button("Find").clicked() {
-                        self.old_logs = Some(scan::old_logs(&self.home, self.log_days));
+                        self.old_logs = Some(scan::old_logs(
+                            &self.home,
+                            &scan::hermes_home(&self.home),
+                            self.log_days,
+                        ));
                     }
                 });
                 if let Some((files, size)) = &self.old_logs {

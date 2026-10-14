@@ -236,7 +236,13 @@ fn start(home: PathBuf, dir: &Path, arg: Option<&str>, window: bool) -> Result<(
 
     match arg {
         Some("scan") => {
-            let s = scan::run(&mut db, &home, &cfg.roots, &cfg.excludes)?;
+            let s = scan::run(
+                &mut db,
+                &home,
+                &scan::hermes_home(&home),
+                &cfg.roots,
+                &cfg.excludes,
+            )?;
             println!(
                 "imported {} log files, {} projects (data: {})",
                 s.files,
