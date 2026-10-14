@@ -152,6 +152,10 @@ impl App {
             },
             Action::Hide => {
                 self.cfg.excludes.push(sel.path.clone());
+                // An open Settings window saves its copy later; it must not bring the project back.
+                if let Some(draft) = self.settings.as_mut() {
+                    draft.excludes.push(sel.path.clone());
+                }
                 self.selected = None;
                 match crate::save_config(&self.cfg_path, &self.cfg) {
                     Ok(()) => format!("hidden {} (added to excludes)", sel.path),
@@ -290,6 +294,8 @@ impl App {
             }
             // Starting at login only makes sense in the tray.
             cfg.background |= cfg.autostart;
+            // The theme is picked outside Settings; keep a change made while this window was open.
+            cfg.theme.clone_from(&self.cfg.theme);
             // Register first, so the saved setting never claims a login start that isn't there.
             if cfg.autostart != self.cfg.autostart
                 && let Err(e) = crate::set_autostart(cfg.autostart)
@@ -377,6 +383,182 @@ impl App {
     }
 }
 
+impl App {
+    /// The selected project: facts, manual fields and clean-up actions. Returns the action clicked
+    /// and a clone clicked (to select it).
+    fn detail_panel(&mut self, ui: &mut egui::Ui, scanning: bool) -> (Option<Action>, Option<Row>) {
+        let (mut action, mut clicked) = (None, None);
+        let Some(sel) = self.selected.as_mut() else {
+            return (None, None);
+        };
+        let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
+        let key = scan::origin_key(&sel.origin);
+        let clones: Vec<&Row> = self
+            .rows
+            .iter()
+            .filter(|r| r.path != sel.path && key.is_some() && scan::origin_key(&r.origin) == key)
+            .collect();
+        // A moved project looks like a new one with the same repo (or, without git, the same folder name).
+        let move_targets: Vec<&Row> = if sel.missing {
+            self.rows
+                .iter()
+                .filter(|r| !r.missing && r.path != sel.path)
+                .filter(|r| match &key {
+                    Some(k) => scan::origin_key(&r.origin).as_ref() == Some(k),
+                    None => r.name == sel.name,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        egui::Panel::right("detail")
+            .resizable(true)
+            .default_size(450.0)
+            .show(ui, |ui| {
+                // While a scan writes, edits wait: SQLite has one writer.
+                ui.add_enabled_ui(!scanning, |ui| {
+                ui.heading(&sel.name);
+                ui.label(&sel.path);
+                ui.label(&sel.origin);
+                ui.label(format!(
+                    "{} sessions ({}), first seen {}",
+                    sel.sessions,
+                    sel.tools,
+                    sel.first_seen.get(..10).unwrap_or("")
+                ));
+                let git = scan::git_label(sel);
+                let last = sel.git_last_commit.as_deref().and_then(|t| t.get(..10));
+                let git_line = match last {
+                    Some(d) => format!("Git: {git}, last commit {d}"),
+                    None => format!("Git: {git}"),
+                };
+                if sel.at_risk {
+                    ui.colored_label(ui.visuals().warn_fg_color, format!("{git_line} (at risk)"));
+                } else {
+                    ui.label(git_line);
+                }
+                if !sel.stack.is_empty() {
+                    ui.label(format!("Stack: {}", sel.stack));
+                }
+                if !clones.is_empty() {
+                    ui.collapsing(format!("Other clones ({})", clones.len()), |ui| {
+                        for c in &clones {
+                            if ui.link(&c.path).clicked() {
+                                clicked = Some((*c).clone());
+                            }
+                        }
+                    });
+                }
+                if sel.missing {
+                    ui.separator();
+                    if move_targets.is_empty() {
+                        ui.weak("Folder is gone. No project with the same repo or name found to merge into.");
+                    } else {
+                        ui.label("Folder is gone. If it moved, merge its history into the new location:");
+                        for t in &move_targets {
+                            if ui
+                                .button(format!("Merge into {}", t.path))
+                                .on_hover_text("Moves sessions, fills empty tags/status/notes, and maps the old path to this one")
+                                .clicked()
+                            {
+                                action = Some(Action::Merge(t.path.clone()));
+                            }
+                        }
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Open folder").clicked() {
+                        open(&sel.path);
+                    }
+                    if let Some(url) = browser_url(&sel.origin)
+                        && ui.button("Open origin").clicked()
+                    {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                    }
+                    if ui.button("Copy path").clicked() {
+                        ui.ctx().copy_text(sel.path.clone());
+                    }
+                });
+                ui.separator();
+                egui::Grid::new("manual").num_columns(2).show(ui, |ui| {
+                    ui.label("Tags");
+                    ui.text_edit_singleline(&mut sel.tags);
+                    ui.end_row();
+                    ui.label("Status");
+                    let auto = format!("auto ({})", sel.shown_status);
+                    let shown = |s: &str| if s.is_empty() { auto.clone() } else { s.into() };
+                    egui::ComboBox::from_id_salt("status")
+                        .selected_text(shown(&sel.status))
+                        .show_ui(ui, |ui| {
+                            for s in STATUSES {
+                                ui.selectable_value(&mut sel.status, s.to_string(), shown(s));
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Notes");
+                    ui.text_edit_multiline(&mut sel.notes);
+                    ui.end_row();
+                });
+                if ui.button("Save").clicked() {
+                    action = Some(Action::Save);
+                }
+
+                ui.collapsing("Clean", |ui| {
+                    if ui
+                        .button("Hide from Hangar")
+                        .on_hover_text("Adds this path to excludes in config.toml")
+                        .clicked()
+                    {
+                        action = Some(Action::Hide);
+                    }
+                    if ui
+                        .add_enabled(sel.missing, egui::Button::new("Forget"))
+                        .on_hover_text("Removes this project and its history from Hangar")
+                        .on_disabled_hover_text(
+                            "Only for missing projects; use Hide for existing ones",
+                        )
+                        .clicked()
+                    {
+                        action = Some(Action::Forget);
+                    }
+                    ui.separator();
+                    match guard {
+                        Some(why) => {
+                            ui.weak(format!("Folder can't be deleted: {why}."));
+                        }
+                        None => {
+                            if sel.at_risk {
+                                ui.colored_label(
+                                    ui.visuals().warn_fg_color,
+                                    format!("This folder holds work that isn't pushed anywhere ({}).", scan::git_label(sel)),
+                                );
+                            }
+                            ui.label(format!(
+                                "Delete the folder: type \"{}\" to confirm.",
+                                sel.name
+                            ));
+                            ui.text_edit_singleline(&mut self.confirm_name);
+                            if ui
+                                .add_enabled(
+                                    self.confirm_name == sel.name,
+                                    egui::Button::new("Move folder to Recycle Bin / Trash"),
+                                )
+                                .clicked()
+                            {
+                                action = Some(Action::TrashFolder);
+                            }
+                        }
+                    }
+                });
+
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| ui.monospace(&self.full_text));
+                });
+            });
+        (action, clicked)
+    }
+}
+
 impl eframe::App for App {
     // Runs before every frame and, while the window is hidden, on each requested repaint.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -416,9 +598,10 @@ impl eframe::App for App {
         {
             self.start_scan();
         }
+        // Keep ticking even when idle: the show-request file and the scan timer are only seen on a frame.
         if self.scanning() {
             ctx.request_repaint_after(Duration::from_millis(250));
-        } else if background {
+        } else {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -493,180 +676,8 @@ impl eframe::App for App {
             self.settings_window(&ctx);
         }
 
-        let mut action = None;
-        let mut clicked = None;
+        let (action, mut clicked) = self.detail_panel(ui, scanning);
         let mut toggle: Option<String> = None;
-        if let Some(sel) = self.selected.as_mut() {
-            let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
-            let key = scan::origin_key(&sel.origin);
-            let clones: Vec<&Row> = self
-                .rows
-                .iter()
-                .filter(|r| {
-                    r.path != sel.path && key.is_some() && scan::origin_key(&r.origin) == key
-                })
-                .collect();
-            // A moved project looks like a new one with the same repo (or, without git, the same folder name).
-            let move_targets: Vec<&Row> = if sel.missing {
-                self.rows
-                    .iter()
-                    .filter(|r| !r.missing && r.path != sel.path)
-                    .filter(|r| match &key {
-                        Some(k) => scan::origin_key(&r.origin).as_ref() == Some(k),
-                        None => r.name == sel.name,
-                    })
-                    .collect()
-            } else {
-                vec![]
-            };
-            egui::Panel::right("detail")
-                .resizable(true)
-                .default_size(450.0)
-                .show(ui, |ui| {
-                    // While a scan writes, edits wait: SQLite has one writer.
-                    ui.add_enabled_ui(!scanning, |ui| {
-                    ui.heading(&sel.name);
-                    ui.label(&sel.path);
-                    ui.label(&sel.origin);
-                    ui.label(format!(
-                        "{} sessions ({}), first seen {}",
-                        sel.sessions,
-                        sel.tools,
-                        sel.first_seen.get(..10).unwrap_or("")
-                    ));
-                    let git = scan::git_label(sel);
-                    let last = sel.git_last_commit.as_deref().and_then(|t| t.get(..10));
-                    let git_line = match last {
-                        Some(d) => format!("Git: {git}, last commit {d}"),
-                        None => format!("Git: {git}"),
-                    };
-                    if sel.at_risk {
-                        ui.colored_label(ui.visuals().warn_fg_color, format!("{git_line} (at risk)"));
-                    } else {
-                        ui.label(git_line);
-                    }
-                    if !sel.stack.is_empty() {
-                        ui.label(format!("Stack: {}", sel.stack));
-                    }
-                    if !clones.is_empty() {
-                        ui.collapsing(format!("Other clones ({})", clones.len()), |ui| {
-                            for c in &clones {
-                                if ui.link(&c.path).clicked() {
-                                    clicked = Some((*c).clone());
-                                }
-                            }
-                        });
-                    }
-                    if sel.missing {
-                        ui.separator();
-                        if move_targets.is_empty() {
-                            ui.weak("Folder is gone. No project with the same repo or name found to merge into.");
-                        } else {
-                            ui.label("Folder is gone. If it moved, merge its history into the new location:");
-                            for t in &move_targets {
-                                if ui
-                                    .button(format!("Merge into {}", t.path))
-                                    .on_hover_text("Moves sessions, fills empty tags/status/notes, and maps the old path to this one")
-                                    .clicked()
-                                {
-                                    action = Some(Action::Merge(t.path.clone()));
-                                }
-                            }
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("Open folder").clicked() {
-                            open(&sel.path);
-                        }
-                        if let Some(url) = browser_url(&sel.origin)
-                            && ui.button("Open origin").clicked()
-                        {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                        }
-                        if ui.button("Copy path").clicked() {
-                            ui.ctx().copy_text(sel.path.clone());
-                        }
-                    });
-                    ui.separator();
-                    egui::Grid::new("manual").num_columns(2).show(ui, |ui| {
-                        ui.label("Tags");
-                        ui.text_edit_singleline(&mut sel.tags);
-                        ui.end_row();
-                        ui.label("Status");
-                        let auto = format!("auto ({})", sel.shown_status);
-                        let shown = |s: &str| if s.is_empty() { auto.clone() } else { s.into() };
-                        egui::ComboBox::from_id_salt("status")
-                            .selected_text(shown(&sel.status))
-                            .show_ui(ui, |ui| {
-                                for s in STATUSES {
-                                    ui.selectable_value(&mut sel.status, s.to_string(), shown(s));
-                                }
-                            });
-                        ui.end_row();
-                        ui.label("Notes");
-                        ui.text_edit_multiline(&mut sel.notes);
-                        ui.end_row();
-                    });
-                    if ui.button("Save").clicked() {
-                        action = Some(Action::Save);
-                    }
-
-                    ui.collapsing("Clean", |ui| {
-                        if ui
-                            .button("Hide from Hangar")
-                            .on_hover_text("Adds this path to excludes in config.toml")
-                            .clicked()
-                        {
-                            action = Some(Action::Hide);
-                        }
-                        if ui
-                            .add_enabled(sel.missing, egui::Button::new("Forget"))
-                            .on_hover_text("Removes this project and its history from Hangar")
-                            .on_disabled_hover_text(
-                                "Only for missing projects; use Hide for existing ones",
-                            )
-                            .clicked()
-                        {
-                            action = Some(Action::Forget);
-                        }
-                        ui.separator();
-                        match guard {
-                            Some(why) => {
-                                ui.weak(format!("Folder can't be deleted: {why}."));
-                            }
-                            None => {
-                                if sel.git_changed.is_some_and(|n| n > 0)
-                                    || sel.git_unpushed.is_some_and(|n| n > 0)
-                                    || sel.origin == "local only"
-                                {
-                                    ui.colored_label(
-                                        ui.visuals().warn_fg_color,
-                                        format!("This folder holds work that isn't pushed anywhere ({}).", scan::git_label(sel)),
-                                    );
-                                }
-                                ui.label(format!(
-                                    "Delete the folder: type \"{}\" to confirm.",
-                                    sel.name
-                                ));
-                                ui.text_edit_singleline(&mut self.confirm_name);
-                                if ui
-                                    .add_enabled(
-                                        self.confirm_name == sel.name,
-                                        egui::Button::new("Move folder to Recycle Bin / Trash"),
-                                    )
-                                    .clicked()
-                                {
-                                    action = Some(Action::TrashFolder);
-                                }
-                            }
-                        }
-                    });
-
-                    ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| ui.monospace(&self.full_text));
-                    });
-                });
-        }
         if let Some(a) = action {
             self.apply(a);
         }

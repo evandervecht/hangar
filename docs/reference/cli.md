@@ -1,7 +1,7 @@
 # CLI
 
 ```
-hangar [scan | list [--json | --csv] | --tray]
+hangar [scan | list [--json | --csv] | --tray | --version | --help]
 ```
 
 | Command | Does | Output |
@@ -12,8 +12,12 @@ hangar [scan | list [--json | --csv] | --tray]
 | `hangar list` | prints every visible project from the database, without scanning | a text table, newest activity first |
 | `hangar list --json` | the same rows as a JSON array | see [export fields](project-fields.md#export-fields) |
 | `hangar list --csv` | the same rows as RFC 4180 CSV with a header row | see [export fields](project-fields.md#export-fields) |
+| `hangar --version`, `-V` | prints the version | `hangar <version>` |
+| `hangar --help`, `-h` | prints usage | exit code 0 |
 | anything else | prints usage | exit code 2 |
 
 `hangar list` columns: `PROJECT` (full path, `(missing)` if the folder is gone), `STATUS`, `GIT`, `TOOLS`, `SESSIONS`, `ACTIVE`, `7 DAYS`, `LAST (UTC)`, `ORIGIN`.
 
-Errors (unreadable config, database problems) are printed to stderr with exit code 1.
+Errors (unreadable config, database problems) are printed to stderr with exit code 1. When the window fails to start, the reason is also written to `hangar.log` in the [data folder](configuration.md#data-folder).
+
+Which of these you can rely on across versions: [Stability](stability.md).

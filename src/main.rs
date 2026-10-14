@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Folders scanned (4 levels deep) for git repos never opened with an AI tool.
+    #[serde(default = "default_roots")]
     pub roots: Vec<String>,
     /// Whole path segments to hide, e.g. "Temp" or "plugins/cache".
+    #[serde(default = "default_excludes")]
     pub excludes: Vec<String>,
     /// "system" (default), "dark", "light" or "hangar".
     #[serde(default)]
@@ -32,6 +34,17 @@ fn default_scan_minutes() -> u64 {
     15
 }
 
+fn default_roots() -> Vec<String> {
+    let home = env::home_dir().unwrap_or_default();
+    vec![home.join("Projects").to_string_lossy().to_string()]
+}
+
+fn default_excludes() -> Vec<String> {
+    ["Temp", "scratchpad", "plugins/cache"]
+        .map(String::from)
+        .to_vec()
+}
+
 fn data_dir(home: &Path) -> PathBuf {
     let base = if cfg!(windows) {
         env::var_os("APPDATA").map_or_else(|| home.join("AppData").join("Roaming"), PathBuf::from)
@@ -44,27 +57,24 @@ fn data_dir(home: &Path) -> PathBuf {
     base.join("hangar")
 }
 
-fn load_config(path: &Path, home: &Path) -> Result<Config, Box<dyn Error>> {
-    if let Ok(s) = fs::read_to_string(path) {
-        return Ok(toml::from_str(&s)?);
+/// Reads config.toml; only a missing file is created with defaults, any other error leaves the file alone.
+fn load_config(path: &Path) -> Result<Config, Box<dyn Error>> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(toml::from_str(&s)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let cfg: Config = toml::from_str("")?; // every key takes its default
+            save_config(path, &cfg)?;
+            Ok(cfg)
+        }
+        Err(e) => Err(format!("can't read {}: {e}", path.display()).into()),
     }
-    let root = home.join("Projects");
-    let cfg = Config {
-        roots: vec![root.to_string_lossy().to_string()],
-        excludes: ["Temp", "scratchpad", "plugins/cache"]
-            .map(String::from)
-            .to_vec(),
-        theme: String::new(),
-        background: false,
-        autostart: false,
-        scan_minutes: default_scan_minutes(),
-    };
-    save_config(path, &cfg)?;
-    Ok(cfg)
 }
 
+/// Writes a temp file and renames it over the config, so a crash mid-write never leaves half a file.
 pub fn save_config(path: &Path, cfg: &Config) -> Result<(), Box<dyn Error>> {
-    Ok(fs::write(path, toml::to_string(cfg)?)?)
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, toml::to_string(cfg)?)?;
+    Ok(fs::rename(tmp, path)?)
 }
 
 /// Start (or stop) Hangar in the tray at login: HKCU Run key, LaunchAgent, or XDG autostart entry.
@@ -104,10 +114,15 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
 </dict>
 </plist>
 "#,
+                    // launchd ignores a plist that isn't valid XML, e.g. a path with "&".
                     exe.display()
+                        .to_string()
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
                 ),
             )
         } else {
+            // shortcut: Exec quoting isn't escaped (", $, `, \ in the exe path); fine for normal install paths.
             (
                 home.join(".config/autostart/hangar.desktop"),
                 format!(
@@ -166,15 +181,45 @@ fn run_window(
     Ok(())
 }
 
+const USAGE: &str = "usage: hangar [scan | list [--json | --csv] | --tray | --version | --help]   (no argument opens the window)";
+
 fn main() -> Result<(), Box<dyn Error>> {
+    let arg = env::args().nth(1);
+    match arg.as_deref() {
+        Some("--version" | "-V") => {
+            println!("hangar {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        _ => {}
+    }
     let home = env::home_dir().ok_or("no home directory")?;
     let dir = data_dir(&home);
-    fs::create_dir_all(&dir)?;
-    let cfg_path = dir.join("config.toml");
-    let cfg = load_config(&cfg_path, &home)?;
+    let window = matches!(arg.as_deref(), None | Some("--tray"));
+    let result = start(home, &dir, arg.as_deref(), window);
+    // Without a console, a failed window start (bad config.toml, locked database) would be silent:
+    // leave the reason in the data folder.
+    if window && let Err(e) = &result {
+        let _ = fs::write(
+            dir.join("hangar.log"),
+            format!(
+                "Hangar failed to start: {e}
+"
+            ),
+        );
+    }
+    result
+}
 
-    let arg = env::args().nth(1);
-    if arg.is_none() || arg.as_deref() == Some("--tray") {
+fn start(home: PathBuf, dir: &Path, arg: Option<&str>, window: bool) -> Result<(), Box<dyn Error>> {
+    fs::create_dir_all(dir)?;
+    let cfg_path = dir.join("config.toml");
+    let cfg = load_config(&cfg_path)?;
+
+    if window {
         release_own_console();
         // Re-register on each start, so the login entry follows the exe if it was moved. Not from a
         // cargo build (target/) or a quarantined macOS copy (AppTranslocation): those paths don't last.
@@ -185,19 +230,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         if cfg.autostart && lasting {
             let _ = set_autostart(true);
         }
-        // Without a console, a failed start would be silent: leave the reason in the data folder.
-        if let Err(e) = run_window(&dir, home, cfg, cfg_path, arg.is_some()) {
-            let _ = fs::write(
-                dir.join("hangar.log"),
-                format!("Hangar failed to start: {e}\n"),
-            );
-            return Err(e);
-        }
-        return Ok(());
+        return run_window(dir, home, cfg, cfg_path, arg.is_some());
     }
     let mut db = scan::open(&dir.join("hangar.db"))?;
 
-    match arg.as_deref() {
+    match arg {
         Some("scan") => {
             let s = scan::run(&mut db, &home, &cfg.roots, &cfg.excludes)?;
             println!(
@@ -251,9 +288,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         _ => {
-            eprintln!(
-                "usage: hangar [scan | list [--json | --csv] | --tray]   (no argument opens the window)"
-            );
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     }
@@ -262,6 +297,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn config_fills_gaps_and_saves_whole() {
+        let cfg: crate::Config = toml::from_str("theme = \"dark\"").unwrap();
+        assert_eq!(cfg.excludes, crate::default_excludes());
+        assert!(cfg.roots[0].ends_with("Projects"));
+        assert_eq!(cfg.scan_minutes, 15);
+        let path = std::env::temp_dir().join("hangar-config-test.toml");
+        // A file that isn't UTF-8 is an error, never replaced by defaults.
+        std::fs::write(&path, b"\xff").unwrap();
+        assert!(crate::load_config(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"\xff");
+        crate::save_config(&path, &cfg).unwrap();
+        let back: crate::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back.theme, "dark");
+        assert!(!path.with_extension("toml.tmp").exists());
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// Touches the real user's login items, so it only runs on request: `cargo test -- --ignored`.
     #[test]
     #[ignore]

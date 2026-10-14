@@ -31,4 +31,4 @@ This moves Claude Code transcripts (with their subagent and tool-result folders)
 
 The project stays in Hangar, marked *(missing)*, until you forget it.
 
-Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), and the AI tools' own data folders (`~/.claude`, `~/.codex`).
+Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), and the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder). Paths are compared after resolving their real spelling, so a root typed in another case still counts.
