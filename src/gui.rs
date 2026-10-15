@@ -45,6 +45,9 @@ struct App {
     /// The running scan; one at a time, shared by launch, Rescan, Settings and the background timer.
     scan: Option<JoinHandle<Result<scan::Stats, String>>>,
     last_scan: Instant,
+    /// "Check for updates" in Settings: the running check, then the latest version or why it failed.
+    update_check: Option<JoinHandle<Result<String, String>>>,
+    update: Option<Result<String, String>>,
     /// Started with --tray: background mode for this session even if the setting is off.
     tray_start: bool,
     hidden: bool,
@@ -95,6 +98,8 @@ pub fn run(
         data_dir,
         scan: None,
         last_scan: Instant::now(),
+        update_check: None,
+        update: None,
         tray_start,
         hidden: tray_start,
         quitting: false,
@@ -265,7 +270,8 @@ impl App {
         let Some(draft) = self.settings.as_mut() else {
             return;
         };
-        let (mut save, mut cancel) = (false, false);
+        let (mut save, mut cancel, mut check) = (false, false, false);
+        let (checking, update) = (self.update_check.is_some(), &self.update);
         let mut open = true;
         egui::Window::new("Settings")
             .open(&mut open)
@@ -294,7 +300,32 @@ impl App {
                     save = ui.button("Save and rescan").clicked();
                     cancel = ui.button("Cancel").clicked();
                 });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.weak(format!("Hangar {VERSION}"));
+                    if checking {
+                        ui.spinner();
+                    } else if ui.button("Check for updates").clicked() {
+                        check = true;
+                    }
+                    match update {
+                        Some(Ok(v)) if newer(v, VERSION) => {
+                            ui.hyperlink_to(format!("Hangar {v} is available"), RELEASES_URL);
+                        }
+                        Some(Ok(_)) => {
+                            ui.label("You have the latest version");
+                        }
+                        Some(Err(e)) => {
+                            ui.label(format!("Couldn't check: {e}"));
+                        }
+                        None => {}
+                    }
+                });
             });
+        if check {
+            self.update = None;
+            self.update_check = Some(std::thread::spawn(latest_release));
+        }
         if save {
             let mut cfg = self.settings.take().expect("settings open");
             for list in [&mut cfg.roots, &mut cfg.excludes] {
@@ -593,6 +624,10 @@ impl eframe::App for App {
     // Runs before every frame and, while the window is hidden, on each requested repaint.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
+        if self.update_check.as_ref().is_some_and(|h| h.is_finished()) {
+            let h = self.update_check.take().expect("checked above");
+            self.update = Some(h.join().unwrap_or_else(|_| Err("check crashed".into())));
+        }
         let background = self.background();
         #[cfg(any(windows, target_os = "macos"))]
         {
@@ -977,6 +1012,33 @@ pub fn hours(secs: f64) -> String {
     format!("{:.1}h", secs / 3600.0)
 }
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const RELEASES_URL: &str = "https://github.com/evandervecht/hangar/releases/latest";
+
+/// Version of the latest GitHub release. Uses the curl that ships with Windows 10+ and macOS, so
+/// Hangar needs no HTTP library; it only runs when the user clicks "Check for updates".
+fn latest_release() -> Result<String, String> {
+    let out = scan::quiet_cmd("curl")
+        .args(["-fsSL", "--max-time", "10"])
+        .arg("https://api.github.com/repos/evandervecht/hangar/releases/latest")
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    v["tag_name"]
+        .as_str()
+        .map(|t| t.trim_start_matches('v').to_string())
+        .ok_or_else(|| "no release found".into())
+}
+
+/// `latest` is a higher a.b.c than `current`; a part that isn't a number counts as 0.
+fn newer(latest: &str, current: &str) -> bool {
+    let parts = |s: &str| -> Vec<u64> { s.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
+    parts(latest) > parts(current)
+}
+
 fn open(path: &str) {
     let cmd = if cfg!(windows) {
         "explorer"
@@ -1087,4 +1149,12 @@ fn resume_refuses_ids_a_shell_would_read() {
                 .starts_with("unexpected session id")
         );
     }
+}
+
+#[test]
+fn newer_compares_numbers_not_text() {
+    assert!(newer("0.7.10", "0.7.9"));
+    assert!(newer("1.0.0", "0.9.9"));
+    assert!(!newer("0.7.1", "0.7.1"));
+    assert!(!newer("0.7.0", "0.7.1"));
 }
