@@ -1172,6 +1172,64 @@ pub fn scratchpads(db: &Connection, temp: &Path) -> HashMap<String, Vec<Scratchp
     out
 }
 
+/// A session that can be reopened in its own tool: `claude --resume <id>` or `codex resume <id>`.
+#[derive(Clone)]
+pub struct Resumable {
+    pub tool: String,
+    pub session: String,
+    /// Last activity, UTC "YYYY-MM-DD HH:MM".
+    pub last: String,
+    /// Folder the session started in; the project folder if that one is gone.
+    pub cwd: String,
+}
+
+/// The project's newest Claude Code and Codex sessions whose log still exists, newest first.
+/// Gemini CLI and Hermes Agent sessions are left out: their resume by id isn't verified.
+pub fn resumable(db: &Connection, project: &str, limit: usize) -> Vec<Resumable> {
+    let Ok(mut st) = db.prepare(
+        "SELECT tool, session, replace(substr(max(last), 1, 16), 'T', ' '), min(file) FROM activity
+         WHERE project = ?1 AND tool IN ('claude', 'codex')
+         GROUP BY tool, session ORDER BY max(last) DESC",
+    ) else {
+        return vec![];
+    };
+    let rows = st.query_map([project], |r| {
+        Ok::<(String, String, String, String), _>((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+    });
+    rows.into_iter()
+        .flatten()
+        .flatten()
+        .filter(|(.., file)| Path::new(file).exists()) // moved to the Trash by Clean: nothing to resume
+        .take(limit)
+        .map(|(tool, session, last, file)| {
+            let cwd = start_cwd(Path::new(&file), &tool, &session)
+                .filter(|c| Path::new(c).is_dir())
+                .unwrap_or_else(|| project.to_string());
+            Resumable {
+                tool,
+                session,
+                last,
+                cwd,
+            }
+        })
+        .collect()
+}
+
+/// First folder a session logged in `file`.
+fn start_cwd(file: &Path, tool: &str, session: &str) -> Option<String> {
+    let mut codex = Codex::default();
+    BufReader::new(fs::File::open(file).ok()?)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
+        .filter_map(|v| match tool {
+            "claude" => claude_event(&v),
+            _ => codex.feed(&v),
+        })
+        .find(|(_, s, _)| s == session)
+        .map(|(cwd, ..)| cwd)
+}
+
 /// Drop these projects and their history from the database (folders and logs are untouched).
 /// The caller passes the exact paths it showed, so hidden projects are never caught along.
 pub fn forget(db: &mut Connection, paths: &[String]) -> rusqlite::Result<usize> {
@@ -1520,6 +1578,49 @@ mod tests {
         assert_eq!((pads[0].session.as_str(), pads[0].items), ("s1", 1));
         assert_eq!(pads[0].modified.len(), 16);
         fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn resumable_sessions_start_where_they_started() {
+        let home = std::env::temp_dir().join("hangar-resume-test");
+        let _ = fs::remove_dir_all(&home);
+        let repo = home.join("repo");
+        let sub = repo.join("src");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&sub).unwrap();
+        let logs = home.join(".claude").join("projects").join("repo");
+        fs::create_dir_all(&logs).unwrap();
+        let line = |cwd: &Path, session: &str, ts: &str| {
+            serde_json::json!({"cwd": cwd.to_string_lossy(), "sessionId": session, "timestamp": ts})
+                .to_string()
+        };
+        // Started in a subfolder, then moved to the repo root; an older session from the root.
+        fs::write(
+            logs.join("new.jsonl"),
+            [
+                line(&sub, "new", "2026-01-02T10:00:00.000Z"),
+                line(&repo, "new", "2026-01-02T10:05:00.000Z"),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        fs::write(
+            logs.join("old.jsonl"),
+            line(&repo, "old", "2026-01-01T10:00:00.000Z"),
+        )
+        .unwrap();
+        let mut db = test_db();
+        run(&mut db, &home, &home.join(".hermes"), &[], &[]).unwrap();
+        let project = normalize(&repo.to_string_lossy());
+        let got = resumable(&db, &project, 5);
+        let ids: Vec<&str> = got.iter().map(|r| r.session.as_str()).collect();
+        assert_eq!(ids, ["new", "old"]);
+        assert_eq!(got[0].cwd, sub.to_string_lossy());
+        assert_eq!(got[0].last, "2026-01-02 10:05");
+        // A log moved to the Trash can't be resumed.
+        fs::remove_file(logs.join("old.jsonl")).unwrap();
+        assert_eq!(resumable(&db, &project, 5).len(), 1);
+        fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]

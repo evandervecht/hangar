@@ -62,9 +62,14 @@ Only new/changed log files are re-imported. History is never purged.
   before deleting the data folder.
 - `hangar --version` / `--help`; stability promise for 1.0 in `docs/reference/stability.md`.
 
+## v0.8 additions
+- Resume one of a project's last 5 Claude Code / Codex sessions from the detail pane: `claude --resume <id>` /
+  `codex resume <id>` in a new terminal, in the folder the session started in. Only ids of letters, digits and `-`.
+
 ## Deferred
 Next: Developer ID signing and notarization for macOS (waiting on the Apple Developer account).
 Cursor sessions once its format is verified.
-Maybe later (CMDB): cost per project across all AI tools (Claude Code, Codex, Cursor, Hermes, Gemini, …);
-change history per project; owner/client field; several machines merged offline (export/import file).
-Later: rendered markdown, resume session, more AI tools.
+Maybe later (CMDB): change history per project; owner/client field; several machines merged offline (export/import file).
+Later: rendered markdown, more AI tools.
+Not planned: cost or token counts, conversation search, session memory, handing a session to another
+tool or model, launching agents (Hangar isn't a launcher; AgentsView covers sessions and cost).
