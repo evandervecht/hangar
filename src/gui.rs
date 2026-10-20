@@ -31,6 +31,8 @@ struct App {
     filter: String,
     at_risk_only: bool,
     selected: Option<Row>,
+    /// The selected project's sessions that can be reopened; read when it's selected.
+    resumable: Vec<scan::Resumable>,
     full_text: String,
     message: String,
     show_clean: bool,
@@ -82,6 +84,7 @@ pub fn run(
         filter: String::new(),
         at_risk_only: false,
         selected: None,
+        resumable: Vec::new(),
         full_text: String::new(),
         message: String::new(),
         show_clean: false,
@@ -131,6 +134,10 @@ impl App {
             Err(e) => self.message = format!("load failed: {e}"),
         }
         self.scratch = scan::scratchpads(&self.db, &std::env::temp_dir());
+        // A rescan adds sessions, Clean trashes their logs.
+        if let Some(sel) = &self.selected {
+            self.resumable = scan::resumable(&self.db, &sel.path, 5);
+        }
     }
 
     fn select(&mut self, row: Row) {
@@ -138,6 +145,7 @@ impl App {
             .and_then(|f| std::fs::read_to_string(f).ok())
             .unwrap_or_else(|| "(no README.md, CLAUDE.md or AGENTS.md)".into());
         self.confirm_name.clear();
+        self.resumable = scan::resumable(&self.db, &row.path, 5);
         self.selected = Some(row);
     }
 
@@ -484,6 +492,23 @@ impl App {
                         ui.ctx().copy_text(sel.path.clone());
                     }
                 });
+                if !self.resumable.is_empty() {
+                    ui.collapsing("Resume a session", |ui| {
+                        for s in &self.resumable {
+                            let tool = if s.tool == "claude" { "Claude Code" } else { "Codex" };
+                            if ui
+                                .button(format!("{tool}, {}", s.last))
+                                .on_hover_text(format!("Opens a terminal in {}", s.cwd))
+                                .clicked()
+                            {
+                                self.message = match resume(s) {
+                                    Ok(()) => format!("resuming {tool} session {}", s.session),
+                                    Err(e) => format!("resume failed: {e}"),
+                                };
+                            }
+                        }
+                    });
+                }
                 ui.separator();
                 egui::Grid::new("manual").num_columns(2).show(ui, |ui| {
                     ui.label("Tags");
@@ -963,6 +988,65 @@ fn open(path: &str) {
     let _ = std::process::Command::new(cmd).arg(path).spawn();
 }
 
+/// Reopen a session in its own tool, in a new terminal window in the folder it started in.
+fn resume(s: &scan::Resumable) -> Result<(), String> {
+    // The id comes from a log file and goes through a shell: only ids made of id characters.
+    if s.session.is_empty()
+        || !s
+            .session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(format!("unexpected session id {:?}", s.session));
+    }
+    let cmd = match s.tool.as_str() {
+        "claude" => format!("claude --resume {}", s.session),
+        "codex" => format!("codex resume {}", s.session),
+        t => return Err(format!("{t} sessions can't be resumed")),
+    };
+    #[cfg(windows)]
+    let mut c = {
+        use std::os::windows::process::CommandExt;
+        // start's first quoted argument is the window title.
+        let mut c = scan::quiet_cmd("cmd");
+        c.raw_arg(format!("/C start \"Hangar\" cmd /K {cmd}"));
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut c = {
+        let mut c = std::process::Command::new("osascript");
+        c.args(["-e", &terminal_script(&s.cwd, &cmd)]);
+        c
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let result = Err(format!("run `{cmd}` in {}", s.cwd));
+    #[cfg(any(windows, target_os = "macos"))]
+    let result = c
+        .current_dir(&s.cwd)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    result
+}
+
+/// AppleScript that runs `cmd` in `cwd` in a new Terminal window. `cwd` comes from a log file:
+/// shell-quoted, then the whole line escaped for an AppleScript string.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn terminal_script(cwd: &str, cmd: &str) -> String {
+    let sh = format!("cd '{}' && {cmd}", cwd.replace('\'', r"'\''"));
+    let line = sh.replace('\\', r"\\").replace('"', r#"\""#);
+    format!("tell application \"Terminal\"\nactivate\ndo script \"{line}\"\nend tell")
+}
+
+#[test]
+fn terminal_script_quotes_odd_folder_names() {
+    assert_eq!(
+        terminal_script(r#"/Users/me/it's "a\b""#, "claude --resume x"),
+        "tell application \"Terminal\"\nactivate\ndo script \
+         \"cd '/Users/me/it'\\\\''s \\\"a\\\\b\\\"' && claude --resume x\"\nend tell"
+    );
+}
+
 /// `git@host:a/b.git` and `https://host/a/b.git` -> `https://host/a/b`; other remotes (file paths) get no button.
 fn browser_url(origin: &str) -> Option<String> {
     let url = if let Some(rest) = origin.strip_prefix("git@") {
@@ -986,4 +1070,21 @@ fn browser_urls() {
         Some("https://github.com/a/b")
     );
     assert_eq!(browser_url("local only"), None);
+}
+
+#[test]
+fn resume_refuses_ids_a_shell_would_read() {
+    let s = |session: &str| scan::Resumable {
+        tool: "claude".into(),
+        session: session.into(),
+        last: String::new(),
+        cwd: ".".into(),
+    };
+    for bad in ["", "a&calc", "a b", "a\"b", "a;rm"] {
+        assert!(
+            resume(&s(bad))
+                .unwrap_err()
+                .starts_with("unexpected session id")
+        );
+    }
 }

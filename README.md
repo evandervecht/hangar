@@ -78,6 +78,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Links clones:** every checkout of the same repo is counted and listed, whatever the URL style.
 - **Detects the stack:** rust, node, python, go, terraform and more, from the files in each project.
 - **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*. If it moved, merge it into its new location and keep its history.
+- **Resumes a session:** reopen one of a project's last Claude Code or Codex sessions in a new terminal, in the folder it started in.
 - **Shows Claude's scratchpads:** the temporary folders Claude Code works in fold out under their project, like folders in Explorer or Finder.
 - **Exports:** `hangar list --json` or `--csv` for spreadsheets and scripts.
 - **Settings:** choose the project folders to scan and the paths to hide, right in the app.
@@ -128,10 +129,15 @@ Scope per version is in [SPEC.md](SPEC.md).
 
 **Maybe later**, still being thought through:
 
-- **Cost per project:** tokens and spend per project and per week, across every AI tool: Claude Code, Codex, Cursor, Hermes, Gemini and others, which also means reading those tools' logs.
 - **Change history:** a timeline per project of what changed and when (origin, status, moves).
 - **Ownership:** an owner or client field, with hours per client.
 - **Several machines:** one view across your Mac and Windows machines without any network connection, for example by exporting a file on one machine and importing it on the other.
+
+**Not planned.** Hangar is about your projects and whether their work is safe in git, not about what your agents did. Tools like [AgentsView](https://github.com/wesm/agentsview) already cover the rest well.
+
+- **Cost or token counts:** spend per project, model or week. On a subscription those numbers say little, and prices would mean fetching a price list online.
+- **Searching conversations** and memory of earlier sessions.
+- **Starting agents:** resume reopens a session in the tool it ran in. Hangar won't hand a session to another tool or model, or launch agents: it isn't a launcher.
 
 ## Support
 
