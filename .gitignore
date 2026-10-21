@@ -19,3 +19,6 @@ desktop.ini
 
 # Local Claude Code settings
 .claude/settings.local.json
+# Signing keys must never be committed.
+*.p12
+*.p8
