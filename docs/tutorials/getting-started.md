@@ -7,7 +7,7 @@ In this tutorial you install Hangar, look at the projects it finds on your machi
 Download Hangar for your OS from [Releases](https://github.com/evandervecht/hangar/releases):
 
 - **Windows:** download and run `hangar-<version>-windows-amd64-setup.exe`. It installs for your user only, without admin rights, adds a Start Menu shortcut and puts `hangar` on your PATH. If SmartScreen warns, choose **More info** → **Run anyway**.
-- **macOS:** download `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `hangar-<version>-darwin-amd64.tar.gz` (Intel), double-click it to unpack, and drag **Hangar** onto **Applications**. The first time you open it, macOS blocks it because it isn't signed: go to **System Settings → Privacy & Security** and click **Open Anyway**.
+- **macOS:** download `hangar-<version>-darwin-arm64.tar.gz` (Apple Silicon) or `hangar-<version>-darwin-amd64.tar.gz` (Intel), double-click it to unpack, and drag **Hangar** onto **Applications**. The first time you open it, macOS asks whether to open an app downloaded from the internet: click **Open**.
 
 To build from source instead, clone the repo and run `./install.ps1` (Windows) or `./install.sh` (macOS). Those scripts also put `hangar` on your PATH.
 

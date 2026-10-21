@@ -1,7 +1,7 @@
 # Hangar — v1 spec
 
 A CMDB for your AI coding projects: where they live, what they are, how much time went into them.
-Rust, one binary, Windows + macOS (Linux works too). Personal use, unsigned local builds.
+Rust, one binary, Windows + macOS (Linux works too). Personal use; macOS releases signed and notarized, Windows builds unsigned.
 
 ## Interface
 - `hangar` — egui window (scan on launch + Rescan button).
@@ -66,8 +66,12 @@ Only new/changed log files are re-imported. History is never purged.
 - Resume one of a project's last 5 Claude Code / Codex sessions from the detail pane: `claude --resume <id>` /
   `codex resume <id>` in a new terminal, in the folder the session started in. Only ids of letters, digits and `-`.
 
+## v0.8.1 additions
+- macOS releases signed with the Developer ID (hardened runtime, apple-events entitlement for Resume),
+  notarized and stapled in `release.yml`. A tag with a hyphen (`v0.8.1-rc.1`) makes a pre-release.
+
 ## Deferred
-Next: Developer ID signing and notarization for macOS (waiting on the Apple Developer account).
+Next: a signed Windows installer.
 Cursor sessions once its format is verified.
 Maybe later (CMDB): change history per project; owner/client field; several machines merged offline (export/import file).
 Later: rendered markdown, more AI tools.
