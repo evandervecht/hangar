@@ -92,7 +92,7 @@ jobs:
           grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
       - name: Notarize (macOS)
         if: runner.os == 'macOS'
-        timeout-minutes: 75
+        timeout-minutes: 330
         env:
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
@@ -107,8 +107,9 @@ jobs:
           id="$(xcrun notarytool submit "$RUNNER_TEMP/Hangar.zip" "${auth[@]}" --output-format json \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
           echo "Notarization submission: $id"
-          # A new developer account's first submissions can wait in Apple's queue for a long time.
-          xcrun notarytool wait "$id" "${auth[@]}" --timeout 1h || true # the status check below decides
+          # A new account's first submissions can wait hours in Apple's queue; later ones take minutes.
+          # 5h keeps the job under GitHub's 6-hour limit.
+          xcrun notarytool wait "$id" "${auth[@]}" --timeout 5h || true # the status check below decides
           status="$(xcrun notarytool info "$id" "${auth[@]}" --output-format json \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
           echo "Notarization status: $status"
