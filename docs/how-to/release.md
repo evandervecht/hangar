@@ -19,6 +19,8 @@ git tag -a v0.2.0 -m "Hangar v0.2.0"
 git push origin v0.2.0
 ```
 
+A tag with a hyphen (`v0.8.1-rc.1`) makes a pre-release: use it to test a release, then delete it with `gh release delete <tag> --cleanup-tag`.
+
 `.github/workflows/release.yml` creates the GitHub release with generated notes and attaches:
 
 | File | Contains |
@@ -30,11 +32,23 @@ git push origin v0.2.0
 | `hangar-<version>-windows-amd64.exe` | the bare Windows executable |
 | `SHA256SUMS` | checksums of all the files above, see [Check a download](verify-download.md) |
 
-## Unsigned binaries
+## macOS signing
 
-The binaries are not signed yet. Signing is in progress: macOS builds will be signed and notarized once Apple approves the developer account.
+From v0.8.1, `release.yml` signs `Hangar.app` with the Developer ID, has Apple notarize it and staples the ticket. It needs these repository secrets:
 
-- **macOS:** after dragging Hangar to Applications, open it once; macOS blocks it. Go to **System Settings → Privacy & Security** and click **Open Anyway**. Or run `xattr -dr com.apple.quarantine /Applications/Hangar.app`.
-- **macOS says "Hangar is damaged and can't be opened":** that's a downloaded app without a valid signature (releases up to v0.5.0 weren't signed at all). Run `xattr -dr com.apple.quarantine /Applications/Hangar.app` once.
+| Secret | Holds |
+|---|---|
+| `MACOS_CERT_P12` | the Developer ID Application certificate with its key, exported as `.p12`, base64 |
+| `MACOS_CERT_PASSWORD` | the password of that `.p12` |
+| `APPLE_TEAM_ID` | the 10-character Team ID |
+| `NOTARY_KEY_P8` | an App Store Connect API key (`.p8`, Developer role), base64 |
+| `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | that key's ID and the issuer ID |
+
+Notarization usually takes minutes; a new account's first submissions can wait hours. The **Notarize** step prints the submission id and waits up to 5 hours. On a Mac, `xcrun notarytool history` (with the same key) shows the queue.
+
+## First launch
+
+- **macOS, v0.8.1 and later:** signed and notarized; macOS only asks once whether to open an app downloaded from the internet. The first **Resume a session** asks to let Hangar control Terminal.
+- **macOS, up to v0.8.0:** open it once; macOS blocks it. Go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Hangar.app`. If macOS says "Hangar is damaged and can't be opened" (releases up to v0.5.0 weren't signed at all), run that `xattr` command once.
 - **macOS command line:** the CLI is inside the app: `/Applications/Hangar.app/Contents/MacOS/hangar list`. To type just `hangar`, run `ln -s /Applications/Hangar.app/Contents/MacOS/hangar /usr/local/bin/hangar` (or into any folder on your PATH).
-- **Windows:** SmartScreen may warn when you run the setup or the bare `.exe`. Choose **More info** → **Run anyway**.
+- **Windows:** the binaries aren't signed yet, so SmartScreen may warn when you run the setup or the bare `.exe`. Choose **More info** → **Run anyway**.

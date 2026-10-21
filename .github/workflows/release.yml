@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish unsigned binaries for Windows and macOS.
+# Push a tag like v0.1.0 to publish binaries for Windows and macOS (macOS signed and notarized).
+# A tag with a hyphen (v0.8.1-rc.1) makes a pre-release.
 on:
   push:
     tags: ["v*"]
@@ -18,7 +19,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
+      - run: |
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes $pre
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -57,13 +60,74 @@ jobs:
           Compress-Archive -Path target/${{ matrix.target }}/release/hangar.exe, README.md, LICENSE -DestinationPath "$name.zip"
           Copy-Item target/${{ matrix.target }}/release/hangar.exe "$name.exe"
           ./packaging/windows-installer.ps1 target/${{ matrix.target }}/release/hangar.exe $env:GITHUB_REF_NAME.TrimStart('v') .
-      - name: Package (macOS)
+      - name: Sign (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # A throwaway keychain holding only the certificate, so codesign never prompts.
+          kc="$RUNNER_TEMP/signing.keychain-db"; kc_pw="$(uuidgen)"
+          security create-keychain -p "$kc_pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kc_pw" "$kc"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$kc"
+
+          mkdir out
+          # The Team ID is part of the certificate's name: "Developer ID Application: <name> (<team>)".
+          SIGN_IDENTITY="Developer ID Application" \
+            sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" out
+          codesign --verify --strict --verbose=2 out/Hangar.app
+          info="$(codesign -dv out/Hangar.app 2>&1)"
+          grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
+      - name: Notarize (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 330
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
+          auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+          ditto -c -k --keepParent out/Hangar.app "$RUNNER_TEMP/Hangar.zip"
+          # Submit first and print the id, so a slow queue shows in the log and can be looked up later.
+          id="$(xcrun notarytool submit "$RUNNER_TEMP/Hangar.zip" "${auth[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+          echo "Notarization submission: $id"
+          # A new account's first submissions can wait hours in Apple's queue; later ones take minutes.
+          # 5h keeps the job under GitHub's 6-hour limit.
+          xcrun notarytool wait "$id" "${auth[@]}" --timeout 5h || true # the status check below decides
+          status="$(xcrun notarytool info "$id" "${auth[@]}" --output-format json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+          echo "Notarization status: $status"
+          if [ "$status" != "Accepted" ]; then
+            [ "$status" = "In Progress" ] || xcrun notarytool log "$id" "${auth[@]}"
+            exit 1
+          fi
+      - name: Staple and pack (macOS)
         if: runner.os == 'macOS'
         # hangar-<version>-darwin-<arch>.tar.gz holding Hangar.app; tar keeps the signature and permissions.
         run: |
-          mkdir out
-          sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" out
+          set -euo pipefail
+          xcrun stapler staple out/Hangar.app
+          spctl --assess --type execute --verbose=2 out/Hangar.app
           tar -czf "hangar-${GITHUB_REF_NAME#v}-darwin-${{ matrix.arch }}.tar.gz" -C out Hangar.app
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
       - run: gh release upload "$GITHUB_REF_NAME" hangar-* --repo "$GITHUB_REPOSITORY" --clobber
         shell: bash
