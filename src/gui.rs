@@ -951,12 +951,12 @@ fn edit_list(ui: &mut egui::Ui, list: &mut Vec<String>, dirs: bool) {
     }
 }
 
-/// Tray icon with Open / Rescan / Quit; Windows and macOS only (Linux would need GTK).
+/// Tray icon with the version, Open / Rescan / Quit; Windows and macOS only (Linux would need GTK).
 #[cfg(any(windows, target_os = "macos"))]
 mod tray {
     use eframe::egui;
     use std::sync::mpsc::{Receiver, channel};
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
     pub enum Cmd {
@@ -972,10 +972,18 @@ mod tray {
 
     pub fn create(ctx: &egui::Context) -> Option<Tray> {
         let menu = Menu::new();
+        let version = MenuItem::new(format!("Hangar {}", super::VERSION), false, None);
         let open = MenuItem::new("Open Hangar", true, None);
         let rescan = MenuItem::new("Rescan now", true, None);
         let quit = MenuItem::new("Quit Hangar", true, None);
-        menu.append_items(&[&open, &rescan, &quit]).ok()?;
+        menu.append_items(&[
+            &version,
+            &PredefinedMenuItem::separator(),
+            &open,
+            &rescan,
+            &quit,
+        ])
+        .ok()?;
         let png = eframe::icon_data::from_png_bytes(include_bytes!("../assets/hangar.png")).ok()?;
         let icon = tray_icon::Icon::from_rgba(png.rgba, png.width, png.height).ok()?;
         let tray = TrayIconBuilder::new()
