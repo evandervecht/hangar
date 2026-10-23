@@ -16,6 +16,18 @@ cargo test --locked
 CI runs the same on Windows, macOS and Linux. Code behind `#[cfg(target_os = "macos")]` only compiles there:
 keep logic in plain functions so it's tested everywhere (see `terminal_script` in src/gui.rs).
 
+## How to work
+
+- **Code:** the ponytail skill (`ponytail:ponytail`): the smallest change that fully solves the task, reuse what
+  exists, stdlib and installed crates first, no abstractions nobody asked for. `/ponytail-review` before a PR.
+- **PR body:** the pr skill (`mattpocock-skills:pr`), in these sections: `## Summary` (the smallest visual that
+  makes the change clear), `## Evidence` (before and after: the checks and what ran), `## Merge Danger`
+  (`**Door:** one-way or two-way`, `**Blast Radius:** small, medium or large` and what it touches), `## Issues`
+  (open issues it touches, `gh issue list --state open`). Add `## Ponytail audit (not applied)` for findings
+  outside the change. .github/pull_request_template.md has the skeleton.
+- Vesper (the workspace dashboard) runs a maintenance pass in rotation and reviews every PR made by an agent
+  (fan-out lanes, then Codex). Its findings are advice; answer them in the PR.
+
 ## Rules
 
 - Never weaken or delete a test to make it pass. A bug fix gets a test that failed before the fix.
@@ -31,5 +43,4 @@ keep logic in plain functions so it's tested everywhere (see `terminal_script` i
 ## Release
 
 docs/how-to/release.md. Bump `version` in Cargo.toml in a PR (`main` is protected: PRs with green CI only),
-then tag the merged commit on main with `v<version>`. Test release
-changes first with a hyphen tag (`v0.8.2-rc.1`), which makes a pre-release.
+then tag the merged commit on main with `v<version>`. Test release changes first with a hyphen tag (`v0.8.2-rc.1`), which makes a pre-release.
