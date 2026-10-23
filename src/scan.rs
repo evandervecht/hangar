@@ -1333,7 +1333,7 @@ fn days_ago(days: u64) -> std::time::SystemTime {
 /// Size of `f` if it wasn't modified since `cutoff`.
 fn old_size(f: &Path, cutoff: std::time::SystemTime) -> Option<u64> {
     let m = fs::metadata(f).ok()?;
-    m.modified().is_ok_and(|t| t < cutoff).then(|| m.len())
+    m.modified().is_ok_and(|t| t < cutoff).then_some(m.len())
 }
 
 /// Move logs to the Recycle Bin / Trash, plus Claude's `<session>/` folder (subagents, tool results) next to each.
