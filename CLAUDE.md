@@ -30,5 +30,6 @@ keep logic in plain functions so it's tested everywhere (see `terminal_script` i
 
 ## Release
 
-docs/how-to/release.md. Bump `version` in Cargo.toml, commit on main, push a `v<version>` tag. Test release
+docs/how-to/release.md. Bump `version` in Cargo.toml in a PR (`main` is protected: PRs with green CI only),
+then tag the merged commit on main with `v<version>`. Test release
 changes first with a hyphen tag (`v0.8.2-rc.1`), which makes a pre-release.
