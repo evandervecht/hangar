@@ -64,6 +64,8 @@
 
 A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Codex projects live, what they are, their git origin and the time you've spent in each. It's built in Rust for Windows and macOS.
 
+Already using [AgentsView](https://github.com/wesm/agentsview)? It helps you understand your coding sessions: conversations, session search, activity and costs. Hangar focuses on the projects themselves: an inventory of where they live, what you last worked on, and which have uncommitted or unpushed changes. Both are local-first and open source, and they work well side by side.
+
 <p align="center"><img src="assets/screenshot.png" alt="Hangar showing nine demo projects with status, tags, tools, active time and a detail panel"></p>
 <p align="center"><sub>Demo data, Hangar theme.</sub></p>
 
