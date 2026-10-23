@@ -1837,6 +1837,26 @@ mod tests {
             last: None,
         };
         assert_eq!(git_health(&dir.join("nope")), none);
+        // A scan writes the same facts, though git runs outside its write transaction.
+        let mut db = test_db();
+        let root = dir.to_string_lossy().to_string();
+        run(
+            &mut db,
+            &dir.join("home"),
+            &dir.join("hermes"),
+            &[root],
+            &[],
+        )
+        .unwrap();
+        let rows = list(&db, &[]).unwrap();
+        assert_eq!(
+            (
+                rows[0].git_changed,
+                rows[0].git_unpushed,
+                rows[0].git_stashed
+            ),
+            (Some(1), Some(2), Some(1))
+        );
         fs::write(dir.join("Cargo.toml"), "").unwrap();
         fs::write(dir.join("main.tf"), "").unwrap();
         assert_eq!(stack(&dir), "rust, terraform");
@@ -1960,6 +1980,30 @@ mod tests {
             strip_credentials("git@github.com:a/b.git"),
             "git@github.com:a/b.git"
         );
+        // Tokens also sit in query strings, sometimes with an `@` of their own.
+        assert_eq!(
+            strip_credentials("https://me:tok@h/a/b.git?token=x"),
+            "https://h/a/b.git"
+        );
+        assert_eq!(strip_credentials("https://h?t=a@b"), "https://h");
+    }
+
+    #[test]
+    fn description_skips_a_symlink_out_of_the_project() {
+        let dir = std::env::temp_dir().join("hangar-symlink-test");
+        let _ = fs::remove_dir_all(&dir);
+        let proj = dir.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(dir.join("secret.md"), "secret").unwrap();
+        fs::write(proj.join("notes.md"), "inside").unwrap();
+        #[cfg(unix)]
+        let link = std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        let link = std::os::windows::fs::symlink_file;
+        link(dir.join("secret.md"), proj.join("README.md")).unwrap();
+        link(proj.join("notes.md"), proj.join("CLAUDE.md")).unwrap();
+        assert_eq!(description_file(&proj), Some(proj.join("CLAUDE.md")));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

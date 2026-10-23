@@ -321,6 +321,16 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn scan_minutes_is_clamped_on_load() {
+        let path = std::env::temp_dir().join("hangar-clamp-test.toml");
+        for (raw, want) in [(0, 1), (999_999_999_999_u64, 1440), (30, 30)] {
+            std::fs::write(&path, format!("scan_minutes = {raw}")).unwrap();
+            assert_eq!(crate::load_config(&path).unwrap().scan_minutes, want);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// Touches the real user's login items, so it only runs on request: `cargo test -- --ignored`.
     #[test]
     #[ignore]

@@ -1146,9 +1146,11 @@ const RELEASES_URL: &str = "https://github.com/evandervecht/hangar/releases/late
 
 /// Version of the latest GitHub release. Uses the curl that ships with Windows 10+ and macOS, so
 /// Hangar needs no HTTP library; it only runs when the user clicks "Check for updates".
+const CURL_ARGS: &[&str] = &["-fsSL", "--max-time", "10"];
+
 fn latest_release() -> Result<String, String> {
     let out = scan::quiet_cmd("curl")
-        .args(["-fsSL", "--max-time", "10"])
+        .args(CURL_ARGS)
         .arg("https://api.github.com/repos/evandervecht/hangar/releases/latest")
         .output()
         .map_err(|e| format!("curl: {e}"))?;
@@ -1271,12 +1273,24 @@ fn resume_refuses_ids_a_shell_would_read() {
         last: String::new(),
         cwd: ".".into(),
     };
-    for bad in ["", "a&calc", "a b", "a\"b", "a;rm"] {
+    for bad in ["", "a&calc", "a b", "a\"b", "a;rm", "-x", "--help"] {
         assert!(
             resume(&s(bad))
                 .unwrap_err()
                 .starts_with("unexpected session id")
         );
+    }
+}
+
+#[test]
+fn update_check_stays_on_https_and_small() {
+    let args = CURL_ARGS.join(" ");
+    for want in [
+        "--proto =https",
+        "--proto-redir =https",
+        "--max-filesize 1M",
+    ] {
+        assert!(args.contains(want), "{want} missing from {args}");
     }
 }
 
