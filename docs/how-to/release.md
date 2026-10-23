@@ -9,7 +9,7 @@
    cargo test --locked
    ```
    To try the Windows installer too: `./packaging/windows-installer.ps1 target/release/hangar.exe <version> target/installer` (needs Inno Setup 6: `winget install JRSoftware.InnoSetup`).
-2. Open the app with `cargo run --release` and switch through every theme in the **Theme** menu. Check that the table, the detail panel and the **Clean up** window are readable in each.
+2. Open the app with `cargo run --release` and switch through every theme under **View → Theme**. Check that the table, the detail panel and the **Clean up** window are readable in each.
 3. Bump `version` in `Cargo.toml` and run `cargo build` so `Cargo.lock` follows. `main` only takes pull requests (a ruleset requires a PR and the three CI checks), so commit this on a branch such as `release-v0.8.2`, open a PR and squash-merge it once CI passes.
 4. Pull `main` and tag the merge commit (below).
 

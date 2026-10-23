@@ -4,12 +4,12 @@ Hangar can keep running in the system tray (Windows) or menu bar (macOS) and res
 
 ## Keep running when the window is closed
 
-1. Click **Settings**.
+1. Open **Hangar → Settings…**.
 2. Under **Background**, tick **Keep running in the tray when the window is closed**.
 3. Set **Rescan in the background every … minutes** (default 15).
 4. Click **Save and rescan**.
 
-Closing the window now hides it. Click the Hangar icon in the tray to open it again, or right-click it for **Open Hangar**, **Rescan now** and **Quit Hangar**.
+Closing the window now hides it. Click the Hangar icon in the tray to open it again, or right-click it for **Open Hangar**, **Rescan now** and **Quit Hangar**. The top line of that menu shows which version is running.
 
 ## Start at login
 

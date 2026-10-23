@@ -1,6 +1,6 @@
 # Change the theme
 
-Pick a theme from the **Theme** menu in the top bar:
+Pick a theme under **View → Theme** in the menu bar:
 
 - **System** follows your OS's light or dark mode (default).
 - **Dark** and **Light** are egui's standard themes.
