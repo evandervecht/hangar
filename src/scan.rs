@@ -164,6 +164,7 @@ pub fn run(
             .collect::<Result<_, _>>()?
     };
     let mut cache = HashMap::new();
+    let norm_home = normalize(&home.to_string_lossy());
     let mut files = 0;
     for (tool, file) in log_files(home, hermes) {
         let Ok(meta) = fs::metadata(&file) else {
@@ -194,14 +195,14 @@ pub fn run(
         }
         tx.execute("DELETE FROM activity WHERE file = ?1", [&key])?;
         if tool == "hermes" {
-            import_hermes(&tx, &file, &key, &moves, &mut cache)?;
+            import_hermes(&tx, &file, &key, &norm_home, &moves, &mut cache)?;
         } else {
             let cwd = if tool == "gemini" {
                 gemini_cwd(&file, home)
             } else {
                 None
             };
-            import_file(&tx, &file, &key, tool, cwd, &moves, &mut cache)?;
+            import_file(&tx, &file, &key, tool, cwd, &norm_home, &moves, &mut cache)?;
         }
         fold(&tx, "lines")?;
         tx.execute("DELETE FROM lines", [])?;
@@ -285,12 +286,14 @@ pub fn run(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_file(
     tx: &Connection,
     file: &Path,
     key: &str,
     tool: &str,
     gemini_cwd: Option<String>,
+    home: &str,
     moves: &[(String, String)],
     cache: &mut HashMap<String, (String, String)>,
 ) -> rusqlite::Result<()> {
@@ -325,7 +328,7 @@ fn import_file(
         let Some((cwd, session, ts)) = ev else {
             continue;
         };
-        let (dir, root) = locate(&cwd, moves, cache);
+        let (dir, root) = locate(&cwd, home, moves, cache);
         let start = starts
             .entry(session.clone())
             .or_insert_with(|| (dir.clone(), root.clone()));
@@ -343,6 +346,7 @@ fn import_hermes(
     tx: &Connection,
     file: &Path,
     key: &str,
+    home: &str,
     moves: &[(String, String)],
     cache: &mut HashMap<String, (String, String)>,
 ) -> rusqlite::Result<()> {
@@ -368,7 +372,7 @@ fn import_hermes(
         "INSERT INTO lines(file, project, tool, session, ts) VALUES (?1, ?2, 'hermes', ?3, ?4)",
     )?;
     for (session, cwd, ts) in rows {
-        let (_, project) = locate(&cwd, moves, cache);
+        let (_, project) = locate(&cwd, home, moves, cache);
         ins.execute(params![key, project, session, ts])?;
     }
     Ok(())
@@ -378,6 +382,7 @@ fn import_hermes(
 /// nearest git repo around it. Cached per cwd: both touch the filesystem.
 fn locate(
     cwd: &str,
+    home: &str,
     moves: &[(String, String)],
     cache: &mut HashMap<String, (String, String)>,
 ) -> (String, String) {
@@ -385,7 +390,7 @@ fn locate(
         .entry(cwd.to_string())
         .or_insert_with(|| {
             let dir = apply_moves(&normalize(cwd), moves);
-            let root = project_root(&dir, "");
+            let root = project_root(&dir, home);
             (dir, root)
         })
         .clone()
@@ -590,10 +595,10 @@ fn apply_moves(path: &str, moves: &[(String, String)]) -> String {
     path.to_string()
 }
 
-/// Nearest folder containing `.git`, else the cwd itself.
+/// Nearest folder containing `.git`, else the cwd itself. The walk ends at `home` (normalized) and
+/// before a folder another account owns: a `.git` planted above them must not claim your sessions.
 // shortcut: a deleted repo's sessions fall back to their own cwd (e.g. repo\src), fine while folders rarely vanish.
 fn project_root(cwd: &str, home: &str) -> String {
-    let _ = home;
     let n = normalize(cwd);
     let mut p = Path::new(&n);
     loop {
@@ -601,10 +606,32 @@ fn project_root(cwd: &str, home: &str) -> String {
             return p.to_string_lossy().to_string();
         }
         match p.parent() {
-            Some(q) => p = q,
-            None => return n,
+            Some(q) if p != Path::new(home) && !foreign(q) => p = q,
+            _ => return n,
         }
     }
+}
+
+/// Owned by another account (Unix only). A folder that's gone isn't, so the walk passes deleted subfolders.
+fn foreign(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(p).is_ok_and(|m| m.uid() != uid())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = p;
+        false
+    }
+}
+
+#[cfg(unix)]
+fn uid() -> u32 {
+    unsafe extern "C" {
+        safe fn getuid() -> u32;
+    }
+    getuid()
 }
 
 /// Exclude patterns match whole path segments, case-insensitive: `Temp` hides `..\Temp\..` but not `templates`.
@@ -1165,6 +1192,11 @@ pub fn scratchpads(db: &Connection, temp: &Path) -> HashMap<String, Vec<Scratchp
     for cwd in read_dirs(&temp.join("claude")) {
         for session_dir in read_dirs(&cwd) {
             let path = session_dir.join("scratchpad");
+            // read_dirs skips symlinked folders; the leaf gets the same check, and in a shared
+            // /tmp/claude only this user's own count.
+            if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) || foreign(&path) {
+                continue;
+            }
             // Top level only: a scratchpad can hold tens of thousands of files (a cloned repo,
             // node_modules) and this runs on the UI thread.
             let (mut items, mut newest) = (0, 0);
@@ -1283,50 +1315,53 @@ pub fn forget(db: &mut Connection, paths: &[String]) -> rusqlite::Result<usize> 
 
 /// Session logs not modified in `days` days, with their total size in bytes.
 pub fn old_logs(home: &Path, hermes: &Path, days: u64) -> (Vec<PathBuf>, u64) {
-    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86400);
+    let cutoff = days_ago(days);
     let mut size = 0;
     let files = log_files(home, hermes)
         .into_iter()
         .filter(|(tool, _)| *tool != "hermes") // a live SQLite store, not a log file
         .map(|(_, f)| f)
-        .filter(|f| {
-            let Ok(m) = fs::metadata(f) else { return false };
-            let old = m.modified().is_ok_and(|t| t < cutoff);
-            if old {
-                size += m.len();
-            }
-            old
-        })
+        .filter(|f| old_size(f, cutoff).inspect(|n| size += n).is_some())
         .collect();
     (files, size)
 }
 
+fn days_ago(days: u64) -> std::time::SystemTime {
+    std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86400)
+}
+
+/// Size of `f` if it wasn't modified since `cutoff`.
+fn old_size(f: &Path, cutoff: std::time::SystemTime) -> Option<u64> {
+    let m = fs::metadata(f).ok()?;
+    m.modified().is_ok_and(|t| t < cutoff).then(|| m.len())
+}
+
 /// Move logs to the Recycle Bin / Trash, plus Claude's `<session>/` folder (subagents, tool results) next to each.
-/// Hangar keeps the imported history, so the projects' time stays in the list.
+/// Hangar keeps the imported history, so the projects' time stays in the list. Each file's age is
+/// checked again: a log written since **Find** belongs to a running session and stays.
 pub fn trash_logs(files: &[PathBuf], days: u64) -> Result<usize, trash::Error> {
-    // STAGE 1 (red run): old behaviour, minus the real trash call so CI runners never drive Finder.
-    let _ = days;
+    let cutoff = days_ago(days);
+    let files: Vec<PathBuf> = files
+        .iter()
+        .filter(|f| old_size(f, cutoff).is_some())
+        .cloned()
+        .collect();
+    if files.is_empty() {
+        return Ok(0);
+    }
+    let mut all = files.clone();
+    all.extend(
+        files
+            .iter()
+            .map(|f| f.with_extension(""))
+            .filter(|d| d.is_dir()),
+    );
+    trash::delete_all(&all)?;
     Ok(files.len())
 }
 
-// STAGE 1 stubs so the Unix test compiles.
-#[cfg(unix)]
-#[allow(dead_code)]
-fn uid() -> u32 {
-    unsafe extern "C" {
-        safe fn getuid() -> u32;
-    }
-    getuid()
-}
-
-#[cfg(unix)]
-#[allow(dead_code)]
-fn foreign(p: &Path) -> bool {
-    let _ = p;
-    false
-}
-
-/// Why a project folder must not be trashed, if it mustn't: home, its parents, a scan root, or the AI tools' own data.
+/// Why a project folder must not be trashed, if it mustn't: home, its parents, a scan root, the AI
+/// tools' own data, private folders (`~/.ssh`, AppData, `~/Library`, Hangar's data) or Documents itself.
 /// Every path is normalized first: a root typed as `c:\projects` must still protect `C:\Projects`.
 pub fn delete_guard(
     path: &str,
@@ -1334,9 +1369,8 @@ pub fn delete_guard(
     roots: &[String],
     data: &Path,
 ) -> Option<&'static str> {
-    let _ = data;
     let n = |p: &Path| PathBuf::from(normalize(&p.to_string_lossy()));
-    let (p, home) = (n(Path::new(path)), n(home));
+    let (p, home, data) = (n(Path::new(path)), n(home), n(data));
     // The same tool folders log_files reads.
     let tool_data = [
         home.join(".claude"),
@@ -1344,6 +1378,14 @@ pub fn delete_guard(
         home.join(".gemini"),
         n(&hermes_home(&home)),
     ];
+    let private = [
+        home.join(".ssh"),
+        home.join("AppData"),
+        home.join("Library"),
+        data.clone(),
+    ];
+    // Projects often live inside Documents, so only the folder itself (and above) is refused.
+    let holders = [home.join("Documents"), data];
     if !p.is_dir() {
         Some("folder doesn't exist")
     } else if home.starts_with(&p) || p.parent().is_none() {
@@ -1352,6 +1394,10 @@ pub fn delete_guard(
         Some("this is (a parent of) a scan root")
     } else if tool_data.iter().any(|d| p.starts_with(d)) {
         Some("this is AI tool data")
+    } else if private.iter().any(|d| p.starts_with(d)) {
+        Some("this is private or app data")
+    } else if holders.iter().any(|d| d.starts_with(&p)) {
+        Some("this is (a parent of) Documents or Hangar's data")
     } else {
         None
     }
@@ -1359,9 +1405,10 @@ pub fn delete_guard(
 
 /// Move a project folder to the Recycle Bin / Trash. The guard runs again here, not only when the button is shown.
 pub fn trash_folder(path: &str, home: &Path, roots: &[String], data: &Path) -> Result<(), String> {
-    // STAGE 1 (red run): old behaviour, no guard; the real trash call is left out.
-    let _ = (path, home, roots, data);
-    Ok(())
+    if let Some(why) = delete_guard(path, home, roots, data) {
+        return Err(why.to_string());
+    }
+    trash::delete(path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

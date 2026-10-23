@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,7 +74,14 @@ fn load_config(path: &Path) -> Result<Config, Box<dyn Error>> {
 /// Writes a temp file and renames it over the config, so a crash mid-write never leaves half a file.
 pub fn save_config(path: &Path, cfg: &Config) -> Result<(), Box<dyn Error>> {
     let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, toml::to_string(cfg)?)?;
+    // A symlink planted at the temp path would redirect the write; create_new never follows one.
+    let _ = fs::remove_file(&tmp);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    opts.open(&tmp)?
+        .write_all(toml::to_string(cfg)?.as_bytes())?;
     Ok(fs::rename(tmp, path)?)
 }
 
@@ -143,11 +151,44 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
+/// The autostart `Exec` value per the Desktop Entry spec: inside quotes `"`, `` ` ``, `$` and `\`
+/// get a backslash, then the string rule doubles every backslash; `%` would start a field code.
 fn desktop_exec(exe: &str) -> String {
-    format!("\"{exe}\" --tray")
+    let mut q = String::new();
+    for c in exe.chars() {
+        match c {
+            '"' | '`' | '$' => {
+                q.push_str(r"\\");
+                q.push(c);
+            }
+            '\\' => q.push_str(r"\\\\"),
+            '%' => q.push_str("%%"),
+            _ => q.push(c),
+        }
+    }
+    format!("\"{q}\" --tray")
 }
 
+/// On Unix only you can read the data folder, the database and the config: they hold your notes and paths.
 fn lock_down(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        // Created here rather than by SQLite, which would use the umask; its -wal file copies this mode.
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(dir.join("hangar.db"))?;
+        for f in ["hangar.db", "config.toml"] {
+            let f = dir.join(f);
+            if f.exists() {
+                fs::set_permissions(f, fs::Permissions::from_mode(0o600))?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
     let _ = dir;
     Ok(())
 }
