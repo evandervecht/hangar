@@ -75,6 +75,7 @@ Only new/changed log files are re-imported. History is never purged.
   (schema 5; at risk when > 0; exported last in CSV). Column headers explain themselves on hover (ℹ).
 - REVIEW.md at the repo root: what the automated review lanes treat as blocker/major, minor and skip.
 - The tray menu starts with the running version (`Hangar 0.8.x`, greyed out).
+- CI `security` job: gitleaks over the full history, trivy (vuln, misconfig; HIGH/CRITICAL with a fix) over the repo.
 - Menu bar in the window: **Hangar** (Settings… Ctrl/⌘+,, Check for updates, Clean up…, Quit) and **View → Theme**;
   the top bar keeps Filter, At risk only and Rescan. macOS: Hangar's own app menu (About, Settings… ⌘,, Hide,
   Quit ⌘Q, which really quits in background mode) and a Window menu.

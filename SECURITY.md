@@ -15,3 +15,5 @@ You'll get an answer within a week. Fixes go into the latest release only.
 ## Releases
 
 macOS builds are signed with a Developer ID and notarized by Apple. Windows builds aren't signed yet. Every release has a `SHA256SUMS` file; see [Check a download](docs/how-to/verify-download.md).
+
+CI, and every release before it publishes, runs gitleaks over the whole git history for committed secrets and trivy over `Cargo.lock` for dependencies with a known HIGH or CRITICAL vulnerability that has a fix.
