@@ -60,7 +60,16 @@ fn data_dir(home: &Path) -> PathBuf {
 /// Reads config.toml; only a missing file is created with defaults, any other error leaves the file alone.
 fn load_config(path: &Path) -> Result<Config, Box<dyn Error>> {
     match fs::read_to_string(path) {
-        Ok(s) => Ok(toml::from_str(&s)?),
+        Ok(s) => {
+            let mut cfg: Config = toml::from_str(&s)?;
+            // 0 would rescan on every frame; a huge value overflows `* 60`.
+            let minutes = cfg.scan_minutes.clamp(1, 1440);
+            if minutes != cfg.scan_minutes {
+                eprintln!("config: scan_minutes {} -> {minutes}", cfg.scan_minutes);
+                cfg.scan_minutes = minutes;
+            }
+            Ok(cfg)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let cfg: Config = toml::from_str("")?; // every key takes its default
             save_config(path, &cfg)?;
@@ -318,6 +327,16 @@ mod tests {
         let back: crate::Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(back.theme, "dark");
         assert!(!path.with_extension("toml.tmp").exists());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn scan_minutes_is_clamped_on_load() {
+        let path = std::env::temp_dir().join("hangar-clamp-test.toml");
+        for (raw, want) in [(0, 1), (999_999_999_999_u64, 1440), (30, 30)] {
+            std::fs::write(&path, format!("scan_minutes = {raw}")).unwrap();
+            assert_eq!(crate::load_config(&path).unwrap().scan_minutes, want);
+        }
         std::fs::remove_file(path).unwrap();
     }
 

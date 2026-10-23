@@ -79,6 +79,9 @@ Only new/changed log files are re-imported. History is never purged.
 - Menu bar in the window: **Hangar** (Settings… Ctrl/⌘+,, Check for updates, Clean up…, Quit) and **View → Theme**;
   the top bar keeps Filter, At risk only and Rescan. macOS: Hangar's own app menu (About, Settings… ⌘,, Hide,
   Quit ⌘Q, which really quits in background mode) and a Window menu.
+- Hardening (#22): `scan_minutes` clamped to 1–1440 on load; git health runs outside the scan's write transaction;
+  Check for updates is HTTPS-only and capped at 1 MB; origin URLs lose their query string; session ids can't start
+  with `-`; a README/CLAUDE.md/AGENTS.md symlink out of the project is skipped.
 
 ## Deferred
 Next: a signed Windows installer.

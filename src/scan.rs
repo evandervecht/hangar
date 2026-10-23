@@ -247,11 +247,15 @@ pub fn run(
             params![p, name, origin(dir), summary.unwrap_or_default(), host, stack(dir)],
         )?;
     }
+    // git can be slow or hang: run it with no write lock held, or the window's saves wait out the busy timeout.
+    tx.commit()?;
     let repos: Vec<&String> = projects
         .iter()
         .filter(|p| Path::new(p).join(".git").exists() && !excluded(p, excludes))
         .collect();
-    for (p, g) in repos.iter().zip(git_health_all(&repos)) {
+    let health = git_health_all(&repos);
+    let tx = db.transaction()?;
+    for (p, g) in repos.iter().zip(health) {
         tx.execute(
             "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_stashed = ?4, git_last_commit = ?5
              WHERE path = ?1",
@@ -671,10 +675,15 @@ fn jsonl_tree(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn description_file(dir: &Path) -> Option<PathBuf> {
+    // A symlink may only point inside the project: its text lands in the db and on screen.
+    let inside = |f: &Path| {
+        !f.is_symlink()
+            || matches!((f.canonicalize(), dir.canonicalize()), (Ok(t), Ok(d)) if t.starts_with(&d))
+    };
     ["README.md", "CLAUDE.md", "AGENTS.md"]
         .iter()
         .map(|f| dir.join(f))
-        .find(|f| f.is_file())
+        .find(|f| f.is_file() && inside(f))
 }
 
 /// First prose paragraph of a markdown file: skips frontmatter, headings, badges, html, tables, code.
@@ -759,8 +768,10 @@ fn parse_origin(cfg: &str) -> Option<String> {
     None
 }
 
-/// `https://user:token@host/x` -> `https://host/x`: tokens must not end up in the db or on screen.
+/// `https://user:token@host/x?token=y` -> `https://host/x`: tokens must not end up in the db or on screen.
 fn strip_credentials(url: &str) -> String {
+    // Query first: an `@` inside it would otherwise pass for the end of a user:token.
+    let url = url.split('?').next().unwrap_or_default();
     if let Some((scheme, rest)) = url.split_once("://") {
         let host_end = rest.find('/').unwrap_or(rest.len());
         if let Some(at) = rest[..host_end].rfind('@') {
@@ -1837,6 +1848,26 @@ mod tests {
             last: None,
         };
         assert_eq!(git_health(&dir.join("nope")), none);
+        // A scan writes the same facts, though git runs outside its write transaction.
+        let mut db = test_db();
+        let root = dir.to_string_lossy().to_string();
+        run(
+            &mut db,
+            &dir.join("home"),
+            &dir.join("hermes"),
+            &[root],
+            &[],
+        )
+        .unwrap();
+        let rows = list(&db, &[]).unwrap();
+        assert_eq!(
+            (
+                rows[0].git_changed,
+                rows[0].git_unpushed,
+                rows[0].git_stashed
+            ),
+            (Some(1), Some(2), Some(1))
+        );
         fs::write(dir.join("Cargo.toml"), "").unwrap();
         fs::write(dir.join("main.tf"), "").unwrap();
         assert_eq!(stack(&dir), "rust, terraform");
@@ -1960,6 +1991,30 @@ mod tests {
             strip_credentials("git@github.com:a/b.git"),
             "git@github.com:a/b.git"
         );
+        // Tokens also sit in query strings, sometimes with an `@` of their own.
+        assert_eq!(
+            strip_credentials("https://me:tok@h/a/b.git?token=x"),
+            "https://h/a/b.git"
+        );
+        assert_eq!(strip_credentials("https://h?t=a@b"), "https://h");
+    }
+
+    #[test]
+    fn description_skips_a_symlink_out_of_the_project() {
+        let dir = std::env::temp_dir().join("hangar-symlink-test");
+        let _ = fs::remove_dir_all(&dir);
+        let proj = dir.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        fs::write(dir.join("secret.md"), "secret").unwrap();
+        fs::write(proj.join("notes.md"), "inside").unwrap();
+        #[cfg(unix)]
+        let link = std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        let link = std::os::windows::fs::symlink_file;
+        link(dir.join("secret.md"), proj.join("README.md")).unwrap();
+        link(proj.join("notes.md"), proj.join("CLAUDE.md")).unwrap();
+        assert_eq!(description_file(&proj), Some(proj.join("CLAUDE.md")));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
