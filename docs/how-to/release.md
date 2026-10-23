@@ -5,8 +5,8 @@
 1. Run the checks CI runs:
    ```sh
    cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo test
+   cargo clippy --all-targets --locked -- -D warnings
+   cargo test --locked
    ```
    To try the Windows installer too: `./packaging/windows-installer.ps1 target/release/hangar.exe <version> target/installer` (needs Inno Setup 6: `winget install JRSoftware.InnoSetup`).
 2. Open the app with `cargo run --release` and switch through every theme in the **Theme** menu. Check that the table, the detail panel and the **Clean up** window are readable in each.
@@ -31,6 +31,26 @@ A tag with a hyphen (`v0.8.1-rc.1`) makes a pre-release: use it to test a releas
 | `hangar-<version>-windows-amd64-setup.exe` | the Windows installer, built from `packaging/windows-installer.iss` with Inno Setup |
 | `hangar-<version>-windows-amd64.exe` | the bare Windows executable |
 | `SHA256SUMS` | checksums of all the files above, see [Check a download](verify-download.md) |
+
+## Roll back a bad release
+
+Fix forward when you can: a patch release (`v0.8.2` after a bad `v0.8.1`) reaches everyone who checks for updates.
+
+When a release must disappear right away (it loses data, or a download is broken):
+
+1. Turn it back into a draft, so it's no longer public and the previous release is **latest** again. **Check for updates** then points to that one.
+   ```sh
+   gh release edit v0.8.1 --draft
+   ```
+2. Say what happened in a GitHub issue, and which version to install instead (the previous release's files are unchanged).
+3. Fix it, test with a pre-release tag (`v0.8.2-rc.1`), then release `v0.8.2`. Delete the draft and its tag once the fix is out:
+   ```sh
+   gh release delete v0.8.1 --cleanup-tag
+   ```
+
+Going back to an older Hangar usually keeps your data: database upgrades so far only add tables and columns, which an older version ignores. Downgrades aren't promised, though (see [Stability](../reference/stability.md)); before a release whose upgrade removes or changes something, say so in its notes.
+
+Rehearse it now and then on a pre-release: tag `-rc.N`, turn it into a draft, delete it.
 
 ## macOS signing
 
