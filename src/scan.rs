@@ -385,7 +385,7 @@ fn locate(
         .entry(cwd.to_string())
         .or_insert_with(|| {
             let dir = apply_moves(&normalize(cwd), moves);
-            let root = project_root(&dir);
+            let root = project_root(&dir, "");
             (dir, root)
         })
         .clone()
@@ -592,7 +592,8 @@ fn apply_moves(path: &str, moves: &[(String, String)]) -> String {
 
 /// Nearest folder containing `.git`, else the cwd itself.
 // shortcut: a deleted repo's sessions fall back to their own cwd (e.g. repo\src), fine while folders rarely vanish.
-fn project_root(cwd: &str) -> String {
+fn project_root(cwd: &str, home: &str) -> String {
+    let _ = home;
     let n = normalize(cwd);
     let mut p = Path::new(&n);
     loop {
@@ -1302,21 +1303,38 @@ pub fn old_logs(home: &Path, hermes: &Path, days: u64) -> (Vec<PathBuf>, u64) {
 
 /// Move logs to the Recycle Bin / Trash, plus Claude's `<session>/` folder (subagents, tool results) next to each.
 /// Hangar keeps the imported history, so the projects' time stays in the list.
-pub fn trash_logs(files: &[PathBuf]) -> Result<usize, trash::Error> {
-    let mut all = files.to_vec();
-    all.extend(
-        files
-            .iter()
-            .map(|f| f.with_extension(""))
-            .filter(|d| d.is_dir()),
-    );
-    trash::delete_all(&all)?;
+pub fn trash_logs(files: &[PathBuf], days: u64) -> Result<usize, trash::Error> {
+    // STAGE 1 (red run): old behaviour, minus the real trash call so CI runners never drive Finder.
+    let _ = days;
     Ok(files.len())
+}
+
+// STAGE 1 stubs so the Unix test compiles.
+#[cfg(unix)]
+#[allow(dead_code)]
+fn uid() -> u32 {
+    unsafe extern "C" {
+        safe fn getuid() -> u32;
+    }
+    getuid()
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+fn foreign(p: &Path) -> bool {
+    let _ = p;
+    false
 }
 
 /// Why a project folder must not be trashed, if it mustn't: home, its parents, a scan root, or the AI tools' own data.
 /// Every path is normalized first: a root typed as `c:\projects` must still protect `C:\Projects`.
-pub fn delete_guard(path: &str, home: &Path, roots: &[String]) -> Option<&'static str> {
+pub fn delete_guard(
+    path: &str,
+    home: &Path,
+    roots: &[String],
+    data: &Path,
+) -> Option<&'static str> {
+    let _ = data;
     let n = |p: &Path| PathBuf::from(normalize(&p.to_string_lossy()));
     let (p, home) = (n(Path::new(path)), n(home));
     // The same tool folders log_files reads.
@@ -1339,6 +1357,13 @@ pub fn delete_guard(path: &str, home: &Path, roots: &[String]) -> Option<&'stati
     }
 }
 
+/// Move a project folder to the Recycle Bin / Trash. The guard runs again here, not only when the button is shown.
+pub fn trash_folder(path: &str, home: &Path, roots: &[String], data: &Path) -> Result<(), String> {
+    // STAGE 1 (red run): old behaviour, no guard; the real trash call is left out.
+    let _ = (path, home, roots, data);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1350,22 +1375,110 @@ mod tests {
         let proj = root.join("proj");
         fs::create_dir_all(&proj).unwrap();
         let roots = vec![root.to_string_lossy().to_string()];
+        let data = home.join("hangar-guard-data");
         let s = |p: &Path| p.to_string_lossy().to_string();
-        assert!(delete_guard(&s(&home), &home, &roots).is_some());
-        assert!(delete_guard(&s(home.parent().unwrap()), &home, &roots).is_some());
-        assert!(delete_guard(&s(&root), &home, &roots).is_some());
-        assert!(delete_guard(&s(&home.join(".claude").join("x")), &home, &roots).is_some());
+        assert!(delete_guard(&s(&home), &home, &roots, &data).is_some());
+        assert!(delete_guard(&s(home.parent().unwrap()), &home, &roots, &data).is_some());
+        assert!(delete_guard(&s(&root), &home, &roots, &data).is_some());
+        assert!(delete_guard(&s(&home.join(".claude").join("x")), &home, &roots, &data).is_some());
         let gemini = home.join(".gemini").join("x");
         fs::create_dir_all(&gemini).unwrap();
-        assert!(delete_guard(&s(&gemini), &home, &roots).is_some());
+        assert!(delete_guard(&s(&gemini), &home, &roots, &data).is_some());
         if cfg!(windows) {
             // A root typed in another case still protects the folder.
             let lower = vec![s(&root).to_lowercase()];
-            assert!(delete_guard(&s(&root), &home, &lower).is_some());
+            assert!(delete_guard(&s(&root), &home, &lower, &data).is_some());
         }
-        assert_eq!(delete_guard(&s(&proj), &home, &roots), None);
+        assert_eq!(delete_guard(&s(&proj), &home, &roots, &data), None);
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&gemini).unwrap();
+    }
+
+    #[test]
+    fn delete_guard_protects_private_folders() {
+        let home = std::env::temp_dir().join("hangar-guard-home");
+        let _ = fs::remove_dir_all(&home);
+        let data = home.join(".local").join("share").join("hangar");
+        let s = |p: &Path| p.to_string_lossy().to_string();
+        let refused = [
+            home.join(".ssh"),
+            home.join("AppData").join("Roaming").join("x"),
+            home.join("Library").join("x"),
+            home.join("Documents"),
+            data.clone(),
+            home.join(".local").join("share"), // holds Hangar's data
+        ];
+        for p in &refused {
+            fs::create_dir_all(p).unwrap();
+            assert!(
+                delete_guard(&s(p), &home, &[], &data).is_some(),
+                "{}",
+                p.display()
+            );
+        }
+        // A project inside Documents is still yours to delete.
+        let proj = home.join("Documents").join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        assert_eq!(delete_guard(&s(&proj), &home, &[], &data), None);
+        // The guard runs again when the folder is trashed: a refused folder stays.
+        assert!(trash_folder(&s(&data), &home, &[], &data).is_err());
+        assert!(data.is_dir());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn trash_logs_skips_logs_written_since_find() {
+        let dir = std::env::temp_dir().join("hangar-trash-logs-test");
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("live.jsonl");
+        fs::write(&log, "{}").unwrap(); // just written: a running session
+        assert_eq!(trash_logs(std::slice::from_ref(&log), 7).unwrap(), 0);
+        assert!(log.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_root_stops_at_home() {
+        let base = std::env::temp_dir().join("hangar-root-home-test");
+        let _ = fs::remove_dir_all(&base);
+        let work = base.join("home").join("work").join("src");
+        let outside = base.join("out").join("proj");
+        for d in [base.join(".git"), work.clone(), outside.join(".git")] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let s = |p: &Path| normalize(&p.to_string_lossy());
+        let home = s(&base.join("home"));
+        // A .git above home doesn't claim the sessions under it.
+        assert_eq!(project_root(&s(&work), &home), s(&work));
+        // Outside home the nearest repo still counts, also from a subfolder that's gone.
+        let gone = Path::new(&s(&outside)).join("gone").join("x");
+        assert_eq!(project_root(&s(&gone), &home), s(&outside));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratchpads_skip_links_and_other_users() {
+        let temp = std::env::temp_dir().join("hangar-scratch-link-test");
+        let _ = fs::remove_dir_all(&temp);
+        let elsewhere = temp.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("a.txt"), "x").unwrap();
+        let session = temp.join("claude").join("-p").join("s1");
+        fs::create_dir_all(&session).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, session.join("scratchpad")).unwrap();
+        let db = test_db();
+        db.execute(
+            "INSERT INTO lines VALUES ('f', '/p', 'claude', 's1', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        fold(&db, "lines").unwrap();
+        assert!(scratchpads(&db, &temp).is_empty());
+        // `/` belongs to root: someone else, unless the tests run as root.
+        assert_eq!(foreign(Path::new("/")), uid() != 0);
+        assert!(!foreign(&temp));
+        fs::remove_dir_all(&temp).unwrap();
     }
 
     #[test]
