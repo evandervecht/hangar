@@ -5,7 +5,8 @@ A project is **at risk** when its work exists in one place only: on this disk.
 1. Tick **At risk only** in the top bar.
 2. Read the **Git** column for each project:
    - `3 changed`: uncommitted changes. Commit them.
-   - `2 unpushed`: commits that are on no remote. Push them.
+   - `2 unpushed`: commits on a local branch that no remote has, also on branches you don't have checked out. Push them.
+   - `1 stashed`: work put aside with `git stash`. Apply it and commit, or drop it.
    - `local only`: a git repo without a remote. Add one (`git remote add origin …`) and push.
    - `no git`: not under version control at all. Run `git init`, or ignore it if it's scratch work.
 3. Fix what matters, then click **Rescan** to update the list.

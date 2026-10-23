@@ -70,6 +70,10 @@ Only new/changed log files are re-imported. History is never purged.
 - macOS releases signed with the Developer ID (hardened runtime, apple-events entitlement for Resume),
   notarized and stapled in `release.yml`. A tag with a hyphen (`v0.8.1-rc.1`) makes a pre-release.
 
+## v0.8.2 additions
+- Git: unpushed counts every local branch (`rev-list HEAD --branches --not --remotes`), new `git_stashed`
+  (schema 5; at risk when > 0; exported last in CSV). Column headers explain themselves on hover (ℹ).
+
 ## Deferred
 Next: a signed Windows installer.
 Cursor sessions once its format is verified.

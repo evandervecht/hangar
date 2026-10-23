@@ -2,6 +2,8 @@
 
 ## Columns
 
+Hover a column header (**ℹ**) in the window for a short version of this table.
+
 | Column | Source | Meaning |
 |---|---|---|
 | Project | automatic | folder name; `(missing)` when the folder no longer exists |
@@ -46,13 +48,14 @@ Choose **auto** in the detail panel to go back to the derived value.
 
 ## Git
 
-Read on every scan with `git status`, `git rev-list` and `git log`, for projects that exist and aren't hidden.
+Read on every scan with `git status`, `git rev-list`, `git stash list` and `git log`, for projects that exist and aren't hidden.
 
 | Value | Meaning |
 |---|---|
-| `clean` | nothing uncommitted, every commit is on a remote |
+| `clean` | nothing uncommitted or stashed, every commit is on a remote |
 | `N changed` | N entries in `git status`: changed or untracked files (an untracked folder counts once) |
-| `N unpushed` | N commits that are on no remote branch |
+| `N unpushed` | N commits on any local branch (or a detached checkout) that no remote branch has; Hangar compares with what the last `git fetch` saw |
+| `N stashed` | N entries in `git stash list`: work put aside that exists only here |
 | `local only` | a repo without an `origin` remote |
 | `no git` | not a git repo |
 | `?` | git couldn't read the repo, for example *dubious ownership* or git not installed |
@@ -60,7 +63,7 @@ Read on every scan with `git status`, `git rev-list` and `git log`, for projects
 
 ### At risk
 
-A project is **at risk** when it exists and its Git value is `no git`, `local only`, or has changed files or unpushed commits. `?` is not at risk, because Hangar can't tell. At-risk values are shown in the warning colour, and **At risk only** filters on them.
+A project is **at risk** when it exists and its Git value is `no git`, `local only`, or has changed files, unpushed commits or stashes. `?` is not at risk, because Hangar can't tell. At-risk values are shown in the warning colour, and **At risk only** filters on them.
 
 ## Stack
 
@@ -95,7 +98,7 @@ Clones are matched on the origin regardless of URL style: `git@host:a/b.git`, `h
 
 `hangar list --json` and `--csv` contain:
 
-`path`, `name`, `status` (CSV: the shown status; JSON: `status` is your manual value and `shown_status` the displayed one), `tags`, `notes`, `origin`, `clones`, `stack`, `git_changed`, `git_unpushed`, `git_last_commit`, `at_risk`, `missing`, `tools`, `sessions`, active time (JSON: `active_secs`, `week_secs`; CSV: `active_hours`, `week_hours`), `first_seen`, `last_active`, `description`.
+`path`, `name`, `status` (CSV: the shown status; JSON: `status` is your manual value and `shown_status` the displayed one), `tags`, `notes`, `origin`, `clones`, `stack`, `git_changed`, `git_unpushed`, `git_last_commit`, `at_risk`, `missing`, `tools`, `sessions`, active time (JSON: `active_secs`, `week_secs`; CSV: `active_hours`, `week_hours`), `first_seen`, `last_active`, `description`, `git_stashed` (v0.8.2; last in CSV).
 
 Unknown git values are `null` in JSON and empty in CSV.
 
@@ -105,7 +108,7 @@ Unknown git values are `null` in JSON and empty in CSV.
 
 | Table | Columns |
 |---|---|
-| `projects` | `path` (key), `name`, `origin`, `description`, `missing`, `host`, `first_seen`, `tags`, `status`, `notes`, `git_changed`, `git_unpushed`, `git_last_commit`, `stack` |
+| `projects` | `path` (key), `name`, `origin`, `description`, `missing`, `host`, `first_seen`, `tags`, `status`, `notes`, `git_changed`, `git_unpushed`, `git_last_commit`, `stack`, `git_stashed` |
 | `activity` | `file`, `project`, `tool`, `session`, `day`, `first`, `last`, `secs` (one row per session per UTC day; `secs` is active time with idle gaps left out) |
 | `files` | `path` (key), `mtime`, `size` (one row per imported log file) |
 | `moves` | `from_path` (key), `to_path` (one row per merged project) |

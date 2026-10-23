@@ -16,6 +16,59 @@ const THEMES: [(&str, &str); 4] = [
 
 const UNKNOWN_GIT: &str = "Git couldn't read this repo, often 'dubious ownership' (the folder belongs to another user). Run `git status` in it to see why.";
 
+/// Table columns and what each means, shown when hovering the header (docs/reference/project-fields.md).
+const COLUMNS: [(&str, &str); 13] = [
+    (
+        "Project",
+        "Folder name; (missing) when the folder no longer exists.",
+    ),
+    ("Location", "The folder the project lives in."),
+    (
+        "Status",
+        "active: a session ran in the last 14 days. idle: none since.\n\
+         active / paused / archived set by you in the detail panel always win.",
+    ),
+    (
+        "Git",
+        "clean: has a remote, nothing changed, unpushed or stashed.\n\
+         N changed: changed or untracked files.\n\
+         N unpushed: commits on any local branch that no remote has.\n\
+         N stashed: entries in git stash.\n\
+         local only: a repo without an origin remote.\n\
+         no git: not a git repo.\n\
+         ?: git couldn't read the repo.\n\
+         empty: the folder is gone.\n\
+         Everything but clean, ? and empty is at risk.",
+    ),
+    (
+        "Stack",
+        "Languages and tools, from marker files in the project folder.",
+    ),
+    (
+        "Clones",
+        "Other projects that are checkouts of the same repo.",
+    ),
+    ("Tags", "Your own labels, set in the detail panel."),
+    (
+        "Tools",
+        "AI tools with sessions here: claude, codex, gemini, hermes.",
+    ),
+    ("Sessions", "Number of AI sessions."),
+    (
+        "Active",
+        "Total active time; gaps over 15 minutes don't count.",
+    ),
+    ("7 days", "Active time today and the 6 days before (UTC)."),
+    (
+        "Last active (UTC)",
+        "Time of the most recent session activity.",
+    ),
+    (
+        "Description",
+        "First paragraph of README.md, else CLAUDE.md, else AGENTS.md.",
+    ),
+];
+
 /// Manual statuses; "" means derived from activity.
 const STATUSES: [&str; 4] = ["", "active", "paused", "archived"];
 
@@ -754,22 +807,8 @@ impl eframe::App for App {
                     .striped(true)
                     .num_columns(13)
                     .show(ui, |ui| {
-                        for h in [
-                            "Project",
-                            "Location",
-                            "Status",
-                            "Git",
-                            "Stack",
-                            "Clones",
-                            "Tags",
-                            "Tools",
-                            "Sessions",
-                            "Active",
-                            "7 days",
-                            "Last active (UTC)",
-                            "Description",
-                        ] {
-                            ui.strong(h);
+                        for (h, tip) in COLUMNS {
+                            ui.strong(format!("{h} ℹ")).on_hover_text(tip);
                         }
                         ui.end_row();
                         let haystack = |r: &Row| {

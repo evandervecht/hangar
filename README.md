@@ -74,7 +74,7 @@ A CMDB for your AI coding projects. Hangar tracks where your Claude Code and Cod
 - **Shows where it lives and where it syncs to:** the path and the git origin, or "local only" / "no git".
 - **Shows the time spent:** sessions, active time (total and the last 7 days, with idle gaps over 15 minutes left out) and when the project was last active.
 - **Shows the state:** *active* or *idle* from recent activity, unless you set active / paused / archived yourself. You can also add tags and notes.
-- **Flags work at risk:** uncommitted changes, unpushed commits, repos without a remote and folders without git, with an **At risk only** filter.
+- **Flags work at risk:** uncommitted changes, unpushed commits on any branch, stashes, repos without a remote and folders without git, with an **At risk only** filter.
 - **Links clones:** every checkout of the same repo is counted and listed, whatever the URL style.
 - **Detects the stack:** rust, node, python, go, terraform and more, from the files in each project.
 - **Never forgets:** a project whose folder is gone stays in the list, flagged *missing*. If it moved, merge it into its new location and keep its history.
