@@ -79,6 +79,10 @@ Only new/changed log files are re-imported. History is never purged.
 - Menu bar in the window: **Hangar** (Settings… Ctrl/⌘+,, Check for updates, Clean up…, Quit) and **View → Theme**;
   the top bar keeps Filter, At risk only and Rescan. macOS: Hangar's own app menu (About, Settings… ⌘,, Hide,
   Quit ⌘Q, which really quits in background mode) and a Window menu.
+- Hardening (#21): the delete guard also refuses `~/.ssh`, AppData, `~/Library`, Hangar's data folder and Documents
+  itself, and runs again at trash time; **Move … files** re-checks each log's age; Unix data folder `0700`, `hangar.db`
+  and `config.toml` `0600`; `config.toml.tmp` is created fresh (never through a symlink); scratchpads skip symlinks and
+  other users' folders; the project walk stops at home and at folders another account owns; the `.desktop` `Exec` is escaped.
 
 ## Deferred
 Next: a signed Windows installer.

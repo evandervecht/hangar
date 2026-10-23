@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,7 +74,14 @@ fn load_config(path: &Path) -> Result<Config, Box<dyn Error>> {
 /// Writes a temp file and renames it over the config, so a crash mid-write never leaves half a file.
 pub fn save_config(path: &Path, cfg: &Config) -> Result<(), Box<dyn Error>> {
     let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, toml::to_string(cfg)?)?;
+    // A symlink planted at the temp path would redirect the write; create_new never follows one.
+    let _ = fs::remove_file(&tmp);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    opts.open(&tmp)?
+        .write_all(toml::to_string(cfg)?.as_bytes())?;
     Ok(fs::rename(tmp, path)?)
 }
 
@@ -122,12 +130,11 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
                 ),
             )
         } else {
-            // shortcut: Exec quoting isn't escaped (", $, `, \ in the exe path); fine for normal install paths.
             (
                 home.join(".config/autostart/hangar.desktop"),
                 format!(
-                    "[Desktop Entry]\nType=Application\nName=Hangar\nExec=\"{}\" --tray\n",
-                    exe.display()
+                    "[Desktop Entry]\nType=Application\nName=Hangar\nExec={}\n",
+                    desktop_exec(&exe.to_string_lossy())
                 ),
             )
         };
@@ -142,6 +149,48 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             }
         }
     }
+}
+
+/// The autostart `Exec` value per the Desktop Entry spec: inside quotes `"`, `` ` ``, `$` and `\`
+/// get a backslash, then the string rule doubles every backslash; `%` would start a field code.
+fn desktop_exec(exe: &str) -> String {
+    let mut q = String::new();
+    for c in exe.chars() {
+        match c {
+            '"' | '`' | '$' => {
+                q.push_str(r"\\");
+                q.push(c);
+            }
+            '\\' => q.push_str(r"\\\\"),
+            '%' => q.push_str("%%"),
+            _ => q.push(c),
+        }
+    }
+    format!("\"{q}\" --tray")
+}
+
+/// On Unix only you can read the data folder, the database and the config: they hold your notes and paths.
+fn lock_down(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        // Created here rather than by SQLite, which would use the umask; its -wal file copies this mode.
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(dir.join("hangar.db"))?;
+        for f in ["hangar.db", "config.toml"] {
+            let f = dir.join(f);
+            if f.exists() {
+                fs::set_permissions(f, fs::Permissions::from_mode(0o600))?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 /// When started from Explorer / the Start Menu, Windows gives this console app its own console window;
@@ -216,6 +265,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn start(home: PathBuf, dir: &Path, arg: Option<&str>, window: bool) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(dir)?;
+    lock_down(dir)?;
     let cfg_path = dir.join("config.toml");
     let cfg = load_config(&cfg_path)?;
 
@@ -319,6 +369,61 @@ mod tests {
         assert_eq!(back.theme, "dark");
         assert!(!path.with_extension("toml.tmp").exists());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn save_config_replaces_a_stale_temp_file() {
+        let path = std::env::temp_dir().join("hangar-stale-tmp-test.toml");
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, "left by a crash").unwrap();
+        let cfg: crate::Config = toml::from_str("theme = \"light\"").unwrap();
+        crate::save_config(&path, &cfg).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("light"));
+        assert!(!tmp.exists());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_config_never_writes_through_a_planted_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("hangar-symlink-config-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (path, victim) = (dir.join("config.toml"), dir.join("victim"));
+        std::fs::write(&victim, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("config.toml.tmp")).unwrap();
+        let cfg: crate::Config = toml::from_str("").unwrap();
+        crate::save_config(&path, &cfg).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_folder_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("hangar-private-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "").unwrap();
+        crate::lock_down(&dir).unwrap();
+        let mode = |f: &str| std::fs::metadata(dir.join(f)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(""), 0o700);
+        assert_eq!((mode("hangar.db"), mode("config.toml")), (0o600, 0o600));
+        // The empty file it creates is a valid database.
+        crate::scan::open(&dir.join("hangar.db")).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn desktop_exec_escapes_per_the_spec() {
+        assert_eq!(
+            crate::desktop_exec(r#"/o'k/a b/$x"`\%y"#),
+            r#""/o'k/a b/\\$x\\"\\`\\\\%%y" --tray"#
+        );
     }
 
     /// Touches the real user's login items, so it only runs on request: `cargo test -- --ignored`.
