@@ -73,6 +73,7 @@ Only new/changed log files are re-imported. History is never purged.
 ## v0.8.2 additions
 - Git: unpushed counts every local branch (`rev-list HEAD --branches --not --remotes`), new `git_stashed`
   (schema 5; at risk when > 0; exported last in CSV). Column headers explain themselves on hover (ℹ).
+- The tray menu starts with the running version (`Hangar 0.8.x`, greyed out).
 
 ## Deferred
 Next: a signed Windows installer.

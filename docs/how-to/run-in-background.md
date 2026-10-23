@@ -9,7 +9,7 @@ Hangar can keep running in the system tray (Windows) or menu bar (macOS) and res
 3. Set **Rescan in the background every … minutes** (default 15).
 4. Click **Save and rescan**.
 
-Closing the window now hides it. Click the Hangar icon in the tray to open it again, or right-click it for **Open Hangar**, **Rescan now** and **Quit Hangar**.
+Closing the window now hides it. Click the Hangar icon in the tray to open it again, or right-click it for **Open Hangar**, **Rescan now** and **Quit Hangar**. The top line of that menu shows which version is running.
 
 ## Start at login
 
