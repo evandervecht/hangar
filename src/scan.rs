@@ -58,7 +58,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(LINES)
 }
 
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 fn migrate(db: &Connection) -> rusqlite::Result<()> {
     let version = |db: &Connection| db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0));
@@ -105,6 +105,14 @@ fn migrate(db: &Connection) -> rusqlite::Result<()> {
                 "DELETE FROM files WHERE path IN (SELECT file FROM activity)",
                 [],
             )?;
+        }
+        let has_stashed = db.query_row(
+            "SELECT count(*) FROM pragma_table_info('projects') WHERE name = 'git_stashed'",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+        if v < 5 && !has_stashed {
+            db.execute("ALTER TABLE projects ADD COLUMN git_stashed INTEGER", [])?;
         }
         let converted = has_events(db)?;
         if converted {
@@ -243,10 +251,11 @@ pub fn run(
         .iter()
         .filter(|p| Path::new(p).join(".git").exists() && !excluded(p, excludes))
         .collect();
-    for (p, (changed, unpushed, last)) in repos.iter().zip(git_health_all(&repos)) {
+    for (p, g) in repos.iter().zip(git_health_all(&repos)) {
         tx.execute(
-            "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_last_commit = ?4 WHERE path = ?1",
-            params![p, changed, unpushed, last],
+            "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_stashed = ?4, git_last_commit = ?5
+             WHERE path = ?1",
+            params![p, g.changed, g.unpushed, g.stashed, g.last],
         )?;
     }
     // Projects not seen this run (log deleted, repo removed) keep their history but get re-checked.
@@ -803,8 +812,10 @@ pub struct Row {
     pub shown_status: String,
     /// Files with uncommitted changes; None when unknown (not a repo, git failed, folder gone).
     pub git_changed: Option<i64>,
-    /// Commits on no remote; None when unknown.
+    /// Commits on a local branch (or a detached HEAD) that no remote has; None when unknown.
     pub git_unpushed: Option<i64>,
+    /// Entries in `git stash list`; None when unknown.
+    pub git_stashed: Option<i64>,
     pub git_last_commit: Option<String>,
     pub stack: String,
     /// Other visible projects with the same origin repo.
@@ -823,7 +834,7 @@ SELECT p.path, p.name, p.origin, p.description, p.missing, p.tags, p.status, p.n
   coalesce(a.total, 0), coalesce(a.week, 0),
   CASE WHEN p.status <> '' THEN p.status
        WHEN julianday(a.last) >= julianday('now', '-14 days') THEN 'active' ELSE 'idle' END,
-  p.git_changed, p.git_unpushed, p.git_last_commit, p.stack
+  p.git_changed, p.git_unpushed, p.git_last_commit, p.stack, p.git_stashed
 FROM projects p LEFT JOIN a ON a.project = p.path
 ORDER BY coalesce(a.last, '') DESC, p.name";
 
@@ -851,6 +862,7 @@ pub fn list(db: &Connection, excludes: &[String]) -> rusqlite::Result<Vec<Row>> 
             git_unpushed: r.get(16)?,
             git_last_commit: r.get(17)?,
             stack: r.get(18)?,
+            git_stashed: r.get(19)?,
             clones: 0,
             at_risk: false,
         })
@@ -888,6 +900,9 @@ pub fn git_label(r: &Row) -> String {
     if unpushed > 0 && r.origin != "local only" {
         parts.push(format!("{unpushed} unpushed"));
     }
+    if let Some(n) = r.git_stashed.filter(|&n| n > 0) {
+        parts.push(format!("{n} stashed"));
+    }
     if r.origin == "local only" {
         parts.push("local only".into());
     }
@@ -898,13 +913,14 @@ pub fn git_label(r: &Row) -> String {
     }
 }
 
-/// Work that exists in one place only: no git, no remote, uncommitted changes or unpushed commits.
+/// Work that exists in one place only: no git, no remote, uncommitted changes, unpushed commits or stashes.
 pub fn at_risk(r: &Row) -> bool {
     !r.missing
         && (r.origin == "no git"
             || r.origin == "local only"
             || r.git_changed.is_some_and(|n| n > 0)
-            || r.git_unpushed.is_some_and(|n| n > 0))
+            || r.git_unpushed.is_some_and(|n| n > 0)
+            || r.git_stashed.is_some_and(|n| n > 0))
 }
 
 /// Same repo regardless of URL style: `git@h:a/b.git`, `https://h/a/b`, `ssh://u@h:22/a/b.git` -> `h/a/b`.
@@ -930,7 +946,7 @@ pub fn origin_key(origin: &str) -> Option<String> {
 }
 
 /// (changed files, unpushed commits, last commit time) per repo, in parallel: git is slow to start on Windows.
-fn git_health_all(repos: &[&String]) -> Vec<(Option<i64>, Option<i64>, Option<String>)> {
+fn git_health_all(repos: &[&String]) -> Vec<GitHealth> {
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
     let chunk = repos.len().div_ceil(workers).max(1);
     std::thread::scope(|s| {
@@ -951,7 +967,16 @@ fn git_health_all(repos: &[&String]) -> Vec<(Option<i64>, Option<i64>, Option<St
     })
 }
 
-fn git_health(dir: &Path) -> (Option<i64>, Option<i64>, Option<String>) {
+/// What `git` says about a repo; each field None when git couldn't tell.
+#[derive(Debug, PartialEq)]
+struct GitHealth {
+    changed: Option<i64>,
+    unpushed: Option<i64>,
+    stashed: Option<i64>,
+    last: Option<String>,
+}
+
+fn git_health(dir: &Path) -> GitHealth {
     // --no-optional-locks: never take index.lock in repos an agent may be working in.
     // core.fsmonitor off: a repo's own config (e.g. from an unzipped archive) could name any program to run.
     // shortcut: clean/process filters from repo config can still run during status; fine while repos are your own.
@@ -967,11 +992,22 @@ fn git_health(dir: &Path) -> (Option<i64>, Option<i64>, Option<String>) {
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
-    let changed = git(&["status", "--porcelain"]).map(|s| s.lines().count() as i64);
-    let unpushed =
-        git(&["rev-list", "--count", "HEAD", "--not", "--remotes"]).and_then(|s| s.parse().ok());
-    let last = git(&["log", "-1", "--format=%cI"]).filter(|s| !s.is_empty());
-    (changed, unpushed, last)
+    // Every local branch, not only the checked-out one; HEAD covers a detached checkout.
+    let unpushed = git(&[
+        "rev-list",
+        "--count",
+        "HEAD",
+        "--branches",
+        "--not",
+        "--remotes",
+    ])
+    .and_then(|s| s.parse().ok());
+    GitHealth {
+        changed: git(&["status", "--porcelain"]).map(|s| s.lines().count() as i64),
+        unpushed,
+        stashed: git(&["stash", "list"]).map(|s| s.lines().count() as i64),
+        last: git(&["log", "-1", "--format=%cI"]).filter(|s| !s.is_empty()),
+    }
 }
 
 /// Languages and tools, from marker files in the project folder itself.
@@ -1068,7 +1104,7 @@ pub fn csv(rows: &[Row]) -> String {
     };
     let opt = |n: Option<i64>| n.map_or(String::new(), |n| n.to_string());
     let mut out = String::from(
-        "path,name,status,tags,notes,origin,clones,stack,git_changed,git_unpushed,git_last_commit,at_risk,missing,tools,sessions,active_hours,week_hours,first_seen,last_active,description\r\n",
+        "path,name,status,tags,notes,origin,clones,stack,git_changed,git_unpushed,git_last_commit,at_risk,missing,tools,sessions,active_hours,week_hours,first_seen,last_active,description,git_stashed\r\n",
     );
     for r in rows {
         let fields = [
@@ -1092,6 +1128,7 @@ pub fn csv(rows: &[Row]) -> String {
             q(&r.first_seen),
             q(&r.last_active),
             q(&r.description),
+            opt(r.git_stashed), // new columns go at the end: scripts may read columns by position
         ];
         out.push_str(&fields.join(","));
         out.push_str("\r\n");
@@ -1544,7 +1581,7 @@ mod tests {
         .unwrap();
         let out = csv(&list(&db, &[]).unwrap());
         assert!(out.contains("\"'=HYPERLINK(\"\"x\"\")\""), "{out}");
-        assert!(out.contains(",'@a,") && out.contains(",'-1+2\r\n"), "{out}");
+        assert!(out.contains(",'@a,") && out.contains(",'-1+2,"), "{out}");
     }
 
     #[test]
@@ -1777,11 +1814,29 @@ mod tests {
         fs::write(dir.join("a.txt"), "a").unwrap();
         git(&["add", "a.txt"]);
         git(&["commit", "-q", "-m", "one"]);
+        // An unpushed commit on a branch that isn't checked out, and a stash.
+        git(&["branch", "side"]);
+        git(&["checkout", "-q", "side"]);
+        fs::write(dir.join("c.txt"), "c").unwrap();
+        git(&["add", "c.txt"]);
+        git(&["commit", "-q", "-m", "two"]);
+        git(&["checkout", "-q", "-"]);
+        fs::write(dir.join("a.txt"), "changed").unwrap();
+        git(&["stash", "-q"]);
         fs::write(dir.join("b.txt"), "b").unwrap();
-        let (changed, unpushed, last) = git_health(&dir);
-        assert_eq!((changed, unpushed), (Some(1), Some(1)));
-        assert!(last.is_some());
-        assert_eq!(git_health(&dir.join("nope")), (None, None, None));
+        let g = git_health(&dir);
+        assert_eq!(
+            (g.changed, g.unpushed, g.stashed),
+            (Some(1), Some(2), Some(1))
+        );
+        assert!(g.last.is_some());
+        let none = GitHealth {
+            changed: None,
+            unpushed: None,
+            stashed: None,
+            last: None,
+        };
+        assert_eq!(git_health(&dir.join("nope")), none);
         fs::write(dir.join("Cargo.toml"), "").unwrap();
         fs::write(dir.join("main.tf"), "").unwrap();
         assert_eq!(stack(&dir), "rust, terraform");
