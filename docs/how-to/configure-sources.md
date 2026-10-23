@@ -1,10 +1,10 @@
 # Choose what Hangar scans
 
-All of these can be done in **Settings** (top bar), or by editing `config.toml` in the [data folder](../reference/configuration.md#data-folder) and restarting Hangar.
+All of these can be done in **Settings** (**Hangar → Settings…** in the menu bar, or ⌘, on macOS and Ctrl+, on Windows), or by editing `config.toml` in the [data folder](../reference/configuration.md#data-folder) and restarting Hangar.
 
 ## Change the main project folder
 
-1. Click **Settings**.
+1. Open **Hangar → Settings…**.
 2. Under **Project folders**, type the folder path, for example `D:\Code`. A *folder not found* warning means the path doesn't exist.
 3. Click **Save and rescan**.
 

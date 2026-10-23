@@ -4,7 +4,7 @@ Hangar has four cleaners. The first two only change Hangar's own database. The l
 
 ## Forget projects whose folder is gone
 
-1. Click **Clean up** in the top bar.
+1. Choose **Hangar → Clean up…** in the menu bar.
 2. Under **Missing projects**, click **Forget all missing**. This forgets the missing projects in the list; hidden ones stay in the database.
 
 To forget one: select a project marked *(missing)*, open **Clean** in the detail panel and click **Forget**.
@@ -17,7 +17,7 @@ Select the project, open **Clean** and click **Hide from Hangar**. See [Choose w
 
 ## Free space taken by old AI session logs
 
-1. Click **Clean up** in the top bar.
+1. Choose **Hangar → Clean up…** in the menu bar.
 2. Under **Old AI session logs**, set the age in days (at least 7) and click **Find**.
 3. Check the file count and size, then click **Move … files to the Recycle Bin / Trash**.
 
