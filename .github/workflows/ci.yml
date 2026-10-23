@@ -40,3 +40,23 @@ jobs:
           cargo build --locked
           $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
           ./packaging/windows-installer.ps1 target/debug/hangar.exe $v target/installer
+
+  # Images pinned by digest instead of the scanners' actions, whose tags have been hijacked before.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans every commit, not only the PR's
+          persist-credentials: false
+      - name: gitleaks
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --redact --no-banner /repo
+      - name: trivy
+        # Secrets are gitleaks' job; --ignore-unfixed so a CVE without a fix doesn't block every PR.
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
+          fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 /repo

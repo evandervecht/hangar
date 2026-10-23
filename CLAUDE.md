@@ -13,7 +13,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-CI runs the same on Windows, macOS and Linux. Code behind `#[cfg(target_os = "macos")]` only compiles there:
+CI runs the same on Windows, macOS and Linux, plus gitleaks and trivy (the `security` job). Code behind `#[cfg(target_os = "macos")]` only compiles there:
 keep logic in plain functions so it's tested everywhere (see `terminal_script` in src/gui.rs).
 
 ## How to work
