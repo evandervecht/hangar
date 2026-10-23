@@ -18,7 +18,7 @@ Hover a column header (**ℹ**) in the window for a short version of this table.
 | Active | automatic | total active time, in hours |
 | 7 days | automatic | active time today and the 6 days before (UTC calendar days) |
 | Last active (UTC) | automatic | time of the most recent log line |
-| Description | automatic | first paragraph of `README.md`, else `CLAUDE.md`, else `AGENTS.md` |
+| Description | automatic | first paragraph of `README.md`, else `CLAUDE.md`, else `AGENTS.md`; a symlink to a file outside the project is skipped |
 
 ## Scratchpads
 
@@ -88,7 +88,7 @@ Detected from files in the project folder itself (not subfolders):
 
 | Value | Meaning |
 |---|---|
-| a URL | the `origin` remote, with any credentials removed |
+| a URL | the `origin` remote, with any credentials and query string removed |
 | `local only` | a git repo without an `origin` remote |
 | `no git` | not a git repo |
 

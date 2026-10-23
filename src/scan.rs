@@ -247,11 +247,15 @@ pub fn run(
             params![p, name, origin(dir), summary.unwrap_or_default(), host, stack(dir)],
         )?;
     }
+    // git can be slow or hang: run it with no write lock held, or the window's saves wait out the busy timeout.
+    tx.commit()?;
     let repos: Vec<&String> = projects
         .iter()
         .filter(|p| Path::new(p).join(".git").exists() && !excluded(p, excludes))
         .collect();
-    for (p, g) in repos.iter().zip(git_health_all(&repos)) {
+    let health = git_health_all(&repos);
+    let tx = db.transaction()?;
+    for (p, g) in repos.iter().zip(health) {
         tx.execute(
             "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_stashed = ?4, git_last_commit = ?5
              WHERE path = ?1",
@@ -671,10 +675,15 @@ fn jsonl_tree(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn description_file(dir: &Path) -> Option<PathBuf> {
+    // A symlink may only point inside the project: its text lands in the db and on screen.
+    let inside = |f: &Path| {
+        !f.is_symlink()
+            || matches!((f.canonicalize(), dir.canonicalize()), (Ok(t), Ok(d)) if t.starts_with(&d))
+    };
     ["README.md", "CLAUDE.md", "AGENTS.md"]
         .iter()
         .map(|f| dir.join(f))
-        .find(|f| f.is_file())
+        .find(|f| f.is_file() && inside(f))
 }
 
 /// First prose paragraph of a markdown file: skips frontmatter, headings, badges, html, tables, code.
@@ -759,8 +768,10 @@ fn parse_origin(cfg: &str) -> Option<String> {
     None
 }
 
-/// `https://user:token@host/x` -> `https://host/x`: tokens must not end up in the db or on screen.
+/// `https://user:token@host/x?token=y` -> `https://host/x`: tokens must not end up in the db or on screen.
 fn strip_credentials(url: &str) -> String {
+    // Query first: an `@` inside it would otherwise pass for the end of a user:token.
+    let url = url.split('?').next().unwrap_or_default();
     if let Some((scheme, rest)) = url.split_once("://") {
         let host_end = rest.find('/').unwrap_or(rest.len());
         if let Some(at) = rest[..host_end].rfind('@') {
