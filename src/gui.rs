@@ -4,6 +4,8 @@ use eframe::egui;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -106,7 +108,10 @@ struct App {
     hidden: bool,
     quitting: bool,
     #[cfg(any(windows, target_os = "macos"))]
-    tray: Option<tray::Tray>,
+    tray: Option<tray_icon::TrayIcon>,
+    /// Clicks in the tray menu, on the tray icon and (macOS) in the app menu.
+    #[cfg(any(windows, target_os = "macos"))]
+    menu: (Sender<tray::Cmd>, Receiver<tray::Cmd>),
     /// Creating the tray icon failed once; don't retry every frame.
     #[cfg(any(windows, target_os = "macos"))]
     tray_failed: bool,
@@ -159,6 +164,8 @@ pub fn run(
         #[cfg(any(windows, target_os = "macos"))]
         tray: None,
         #[cfg(any(windows, target_os = "macos"))]
+        menu: std::sync::mpsc::channel(),
+        #[cfg(any(windows, target_os = "macos"))]
         tray_failed: false,
     };
     // Show the last scan's rows at once; the launch scan runs in the background.
@@ -178,6 +185,10 @@ pub fn run(
         opts,
         Box::new(|cc| {
             apply_theme(&cc.egui_ctx, &app.cfg.theme);
+            #[cfg(any(windows, target_os = "macos"))]
+            tray::listen(&cc.egui_ctx, app.menu.0.clone());
+            #[cfg(target_os = "macos")]
+            tray::app_menu();
             Ok(Box::new(app))
         }),
     )?;
@@ -318,6 +329,25 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
+    fn open_settings(&mut self) {
+        if self.settings.is_none() {
+            self.settings = Some(self.cfg.clone());
+        }
+    }
+
+    fn check_updates(&mut self) {
+        if self.update_check.is_none() {
+            self.update = None;
+            self.update_check = Some(std::thread::spawn(latest_release));
+        }
+    }
+
+    /// Really quit, also in background mode (closing the window would only hide it).
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.quitting = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         let scanning = self.scanning();
         let Some(draft) = self.settings.as_mut() else {
@@ -376,8 +406,7 @@ impl App {
                 });
             });
         if check {
-            self.update = None;
-            self.update_check = Some(std::thread::spawn(latest_release));
+            self.check_updates();
         }
         if save {
             let mut cfg = self.settings.take().expect("settings open");
@@ -685,26 +714,29 @@ impl eframe::App for App {
         #[cfg(any(windows, target_os = "macos"))]
         {
             if background && self.tray.is_none() && !self.tray_failed {
-                self.tray = tray::create(ctx);
+                self.tray = tray::create(ctx, self.menu.0.clone());
                 self.tray_failed = self.tray.is_none();
             } else if !background {
                 self.tray = None;
                 self.tray_failed = false;
             }
-            let cmds: Vec<tray::Cmd> = self
-                .tray
-                .as_ref()
-                .map_or(vec![], |t| t.rx.try_iter().collect());
+            let cmds: Vec<tray::Cmd> = self.menu.1.try_iter().collect();
             for cmd in cmds {
                 match cmd {
                     tray::Cmd::Show => self.show(ctx),
                     tray::Cmd::Rescan => self.start_scan(),
-                    tray::Cmd::Quit => {
-                        self.quitting = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    tray::Cmd::Quit => self.quit(ctx),
+                    #[cfg(target_os = "macos")]
+                    tray::Cmd::Settings => {
+                        self.show(ctx);
+                        self.open_settings();
                     }
                 }
             }
+        }
+        // On macOS the app menu usually takes ⌘, before egui sees it.
+        if ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_KEY)) {
+            self.open_settings();
         }
         // A second `hangar` start leaves this file and exits; bring this window forward instead.
         let request = self.data_dir.join("show-request");
@@ -741,6 +773,43 @@ impl eframe::App for App {
         }
         let scanning = self.scanning();
         egui::Panel::top("top").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("Hangar", |ui| {
+                    let key = ui.ctx().format_shortcut(&SETTINGS_KEY);
+                    if ui
+                        .add(egui::Button::new("Settings…").shortcut_text(key))
+                        .clicked()
+                    {
+                        self.open_settings();
+                    }
+                    if ui.button("Check for updates").clicked() {
+                        self.open_settings();
+                        self.check_updates();
+                    }
+                    if ui.button("Clean up…").clicked() {
+                        self.show_clean = true;
+                    }
+                    ui.separator();
+                    if ui.button("Quit Hangar").clicked() {
+                        self.quit(&ctx);
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    ui.menu_button("Theme", |ui| {
+                        for (key, label) in THEMES {
+                            if ui
+                                .radio_value(&mut self.cfg.theme, key.to_string(), label)
+                                .changed()
+                            {
+                                apply_theme(ui.ctx(), key);
+                                if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
+                                    self.message = format!("theme not saved: {e}");
+                                }
+                            }
+                        }
+                    });
+                });
+            });
             ui.horizontal(|ui| {
                 ui.label("Filter");
                 ui.text_edit_singleline(&mut self.filter);
@@ -755,31 +824,6 @@ impl eframe::App for App {
                 if scanning {
                     ui.spinner();
                 }
-                if ui.button("Clean up").clicked() {
-                    self.show_clean = !self.show_clean;
-                }
-                if ui.button("Settings").clicked() {
-                    self.settings = Some(self.cfg.clone());
-                }
-                let current = THEMES
-                    .iter()
-                    .find(|(k, _)| *k == self.cfg.theme)
-                    .map_or("System", |(_, l)| l);
-                egui::ComboBox::from_id_salt("theme")
-                    .selected_text(format!("Theme: {current}"))
-                    .show_ui(ui, |ui| {
-                        for (key, label) in THEMES {
-                            if ui
-                                .selectable_value(&mut self.cfg.theme, key.to_string(), label)
-                                .changed()
-                            {
-                                apply_theme(ui.ctx(), key);
-                                if let Err(e) = crate::save_config(&self.cfg_path, &self.cfg) {
-                                    self.message = format!("theme not saved: {e}");
-                                }
-                            }
-                        }
-                    });
                 ui.label(format!("{} projects", self.rows.len()));
                 ui.weak(&self.message);
             });
@@ -951,11 +995,12 @@ fn edit_list(ui: &mut egui::Ui, list: &mut Vec<String>, dirs: bool) {
     }
 }
 
-/// Tray icon with the version, Open / Rescan / Quit; Windows and macOS only (Linux would need GTK).
+/// Tray icon with the version, Open / Rescan / Quit, and the macOS app menu; Windows and macOS only
+/// (Linux would need GTK).
 #[cfg(any(windows, target_os = "macos"))]
 mod tray {
     use eframe::egui;
-    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::mpsc::Sender;
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -963,25 +1008,37 @@ mod tray {
         Show,
         Rescan,
         Quit,
+        #[cfg(target_os = "macos")]
+        Settings,
     }
 
-    pub struct Tray {
-        _icon: TrayIcon,
-        pub rx: Receiver<Cmd>,
+    /// One handler for every native menu: muda keeps only the last one set. Handlers run outside
+    /// egui; they queue a command and wake the (possibly hidden) window.
+    pub fn listen(ctx: &egui::Context, tx: Sender<Cmd>) {
+        let ctx = ctx.clone();
+        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+            let cmd = match e.id.as_ref() {
+                "open" => Cmd::Show,
+                "rescan" => Cmd::Rescan,
+                "quit" => Cmd::Quit,
+                #[cfg(target_os = "macos")]
+                "settings" => Cmd::Settings,
+                _ => return,
+            };
+            let _ = tx.send(cmd);
+            ctx.request_repaint();
+        }));
     }
 
-    pub fn create(ctx: &egui::Context) -> Option<Tray> {
+    pub fn create(ctx: &egui::Context, tx: Sender<Cmd>) -> Option<TrayIcon> {
         let menu = Menu::new();
         let version = MenuItem::new(format!("Hangar {}", super::VERSION), false, None);
-        let open = MenuItem::new("Open Hangar", true, None);
-        let rescan = MenuItem::new("Rescan now", true, None);
-        let quit = MenuItem::new("Quit Hangar", true, None);
         menu.append_items(&[
             &version,
             &PredefinedMenuItem::separator(),
-            &open,
-            &rescan,
-            &quit,
+            &MenuItem::with_id("open", "Open Hangar", true, None),
+            &MenuItem::with_id("rescan", "Rescan now", true, None),
+            &MenuItem::with_id("quit", "Quit Hangar", true, None),
         ])
         .ok()?;
         let png = eframe::icon_data::from_png_bytes(include_bytes!("../assets/hangar.png")).ok()?;
@@ -992,27 +1049,7 @@ mod tray {
             .with_icon(icon)
             .build()
             .ok()?;
-        let (tx, rx) = channel();
-        // Handlers run outside egui; they queue a command and wake the (possibly hidden) window.
-        let (ids, menu_tx, menu_ctx) = (
-            (open.id().clone(), rescan.id().clone(), quit.id().clone()),
-            tx.clone(),
-            ctx.clone(),
-        );
-        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-            let cmd = if e.id == ids.0 {
-                Cmd::Show
-            } else if e.id == ids.1 {
-                Cmd::Rescan
-            } else if e.id == ids.2 {
-                Cmd::Quit
-            } else {
-                return;
-            };
-            let _ = menu_tx.send(cmd);
-            menu_ctx.request_repaint();
-        }));
-        let icon_ctx = ctx.clone();
+        let ctx = ctx.clone();
         TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -1021,10 +1058,52 @@ mod tray {
             } = e
             {
                 let _ = tx.send(Cmd::Show);
-                icon_ctx.request_repaint();
+                ctx.request_repaint();
             }
         }));
-        Some(Tray { _icon: tray, rx })
+        Some(tray)
+    }
+
+    /// Replaces winit's default app menu, adding Settings… ⌘, where Mac users look for it.
+    #[cfg(target_os = "macos")]
+    pub fn app_menu() {
+        use tray_icon::menu::accelerator::{Accelerator, Code, Modifiers};
+        use tray_icon::menu::{AboutMetadata, Submenu};
+        let key = |code| Some(Accelerator::new(Modifiers::META, code));
+        let about = AboutMetadata {
+            version: Some(super::VERSION.into()),
+            ..Default::default()
+        };
+        let app = Submenu::new("Hangar", true);
+        let window = Submenu::new("Window", true);
+        let menu = Menu::new();
+        let built = app
+            .append_items(&[
+                &PredefinedMenuItem::about(Some("About Hangar"), Some(about)),
+                &PredefinedMenuItem::separator(),
+                &MenuItem::with_id("settings", "Settings…", true, key(Code::Comma)),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::services(None),
+                &PredefinedMenuItem::separator(),
+                &PredefinedMenuItem::hide(None),
+                &PredefinedMenuItem::hide_others(None),
+                &PredefinedMenuItem::show_all(None),
+                &PredefinedMenuItem::separator(),
+                // Our own Quit, so background mode really quits instead of hiding.
+                &MenuItem::with_id("quit", "Quit Hangar", true, key(Code::KeyQ)),
+            ])
+            .and_then(|()| {
+                window.append_items(&[
+                    &PredefinedMenuItem::minimize(None),
+                    &PredefinedMenuItem::fullscreen(None),
+                ])
+            })
+            .and_then(|()| menu.append_items(&[&app, &window]));
+        if built.is_ok() {
+            menu.init_for_nsapp();
+            // NSApp keeps the menu for the life of the app; muda must not tear down its items.
+            std::mem::forget(menu);
+        }
     }
 }
 
@@ -1060,6 +1139,9 @@ pub fn hours(secs: f64) -> String {
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// ⌘, on macOS, Ctrl+, elsewhere.
+const SETTINGS_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Comma);
 const RELEASES_URL: &str = "https://github.com/evandervecht/hangar/releases/latest";
 
 /// Version of the latest GitHub release. Uses the curl that ships with Windows 10+ and macOS, so
