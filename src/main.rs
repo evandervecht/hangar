@@ -390,6 +390,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
     fn save_config_replaces_a_stale_temp_file() {
         let path = std::env::temp_dir().join("hangar-stale-tmp-test.toml");
         let tmp = path.with_extension("toml.tmp");
