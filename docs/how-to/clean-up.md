@@ -21,7 +21,7 @@ Select the project, open **Clean** and click **Hide from Hangar**. See [Choose w
 2. Under **Old AI session logs**, set the age in days (at least 7) and click **Find**.
 3. Check the file count and size, then click **Move … files to the Recycle Bin / Trash**.
 
-This moves Claude Code transcripts (with their subagent and tool-result folders) and Codex rollouts. Hangar keeps the history it already imported, so active time and session counts don't change. Claude Code and Codex can no longer resume those sessions.
+This moves Claude Code transcripts (with their subagent and tool-result folders) and Codex rollouts. Hangar keeps the history it already imported, so active time and session counts don't change. Claude Code and Codex can no longer resume those sessions. Each file's age is checked again when you click, so a log written since **Find** (a session still running) stays.
 
 ## Delete a project folder
 
@@ -31,7 +31,7 @@ This moves Claude Code transcripts (with their subagent and tool-result folders)
 
 The project stays in Hangar, marked *(missing)*, until you forget it.
 
-Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), and the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder). Paths are compared after resolving their real spelling, so a root typed in another case still counts.
+Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder), `~/.ssh`, `AppData` and `~/Library` (and anything in them), Hangar's own data folder (or anything above it), and `Documents` itself; a project inside `Documents` can still go. The check runs again at the moment the folder is moved. Paths are compared after resolving their real spelling, so a root typed in another case still counts.
 
 ## Uninstall Hangar (Windows)
 

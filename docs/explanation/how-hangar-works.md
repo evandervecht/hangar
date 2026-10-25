@@ -12,7 +12,7 @@ Lines that aren't valid JSON or lack the fields Hangar needs are skipped. That k
 
 ## What counts as a project
 
-A session runs in a working folder, which is often a subfolder of a repo. Hangar walks up from that folder to the nearest one containing `.git` and calls that the project. Without git anywhere above it, the working folder itself is the project.
+A session runs in a working folder, which is often a subfolder of a repo. Hangar walks up from that folder to the nearest one containing `.git` and calls that the project. The walk stops at your home folder and, on macOS and Linux, before a folder another account owns, so a `.git` above those never claims your sessions. Without git on the way, the working folder itself is the project.
 
 The agent can change folders during a session, for example to clone a repo into a scratch folder and work in it. Hangar then looks at the folder the session started in:
 

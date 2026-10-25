@@ -82,6 +82,10 @@ Only new/changed log files are re-imported. History is never purged.
 - Hardening (#22): `scan_minutes` clamped to 1–1440 on load; git health runs outside the scan's write transaction;
   Check for updates is HTTPS-only and capped at 1 MB; origin URLs lose their query string; session ids can't start
   with `-`; a README/CLAUDE.md/AGENTS.md symlink out of the project is skipped.
+- Hardening (#21): the delete guard also refuses `~/.ssh`, AppData, `~/Library`, Hangar's data folder and Documents
+  itself, and runs again at trash time; **Move … files** re-checks each log's age; Unix data folder `0700`, `hangar.db`
+  and `config.toml` `0600`; `config.toml.tmp` is created fresh (never through a symlink); scratchpads skip symlinks and
+  other users' folders; the project walk stops at home and at folders another account owns; the `.desktop` `Exec` is escaped.
 
 ## Deferred
 Next: a signed Windows installer.

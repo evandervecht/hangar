@@ -246,17 +246,19 @@ impl App {
                     Err(e) => format!("forget failed: {e}"),
                 }
             }
-            Action::TrashFolder => match trash::delete(&sel.path) {
-                Ok(()) => {
-                    self.selected = None;
-                    let _ = self.db.execute(
-                        "UPDATE projects SET missing = 1 WHERE path = ?1",
-                        [&sel.path],
-                    );
-                    format!("moved {} to the Recycle Bin / Trash", sel.path)
+            Action::TrashFolder => {
+                match scan::trash_folder(&sel.path, &self.home, &self.cfg.roots, &self.data_dir) {
+                    Ok(()) => {
+                        self.selected = None;
+                        let _ = self.db.execute(
+                            "UPDATE projects SET missing = 1 WHERE path = ?1",
+                            [&sel.path],
+                        );
+                        format!("moved {} to the Recycle Bin / Trash", sel.path)
+                    }
+                    Err(e) => format!("delete failed: {e}"),
                 }
-                Err(e) => format!("delete failed: {e}"),
-            },
+            }
             Action::Merge(to) => match scan::merge(&mut self.db, &sel.path, &to) {
                 Ok(()) => {
                     self.selected = None;
@@ -497,7 +499,7 @@ impl App {
                         .add_enabled(!files.is_empty(), egui::Button::new(label))
                         .clicked()
                     {
-                        self.message = match scan::trash_logs(files) {
+                        self.message = match scan::trash_logs(files, self.log_days) {
                             Ok(n) => format!("moved {n} log files to the Recycle Bin / Trash"),
                             Err(e) => format!("trash failed: {e}"),
                         };
@@ -517,7 +519,7 @@ impl App {
         let Some(sel) = self.selected.as_mut() else {
             return (None, None);
         };
-        let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots);
+        let guard = scan::delete_guard(&sel.path, &self.home, &self.cfg.roots, &self.data_dir);
         let key = scan::origin_key(&sel.origin);
         let clones: Vec<&Row> = self
             .rows
