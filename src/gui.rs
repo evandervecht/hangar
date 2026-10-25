@@ -1145,12 +1145,24 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SETTINGS_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Comma);
 const RELEASES_URL: &str = "https://github.com/evandervecht/hangar/releases/latest";
+/// HTTPS only, redirects included, and no more than a release's JSON.
+const CURL_ARGS: &[&str] = &[
+    "-fsSL",
+    "--max-time",
+    "10",
+    "--proto",
+    "=https",
+    "--proto-redir",
+    "=https",
+    "--max-filesize",
+    "1M",
+];
 
 /// Version of the latest GitHub release. Uses the curl that ships with Windows 10+ and macOS, so
 /// Hangar needs no HTTP library; it only runs when the user clicks "Check for updates".
 fn latest_release() -> Result<String, String> {
     let out = scan::quiet_cmd("curl")
-        .args(["-fsSL", "--max-time", "10"])
+        .args(CURL_ARGS)
         .arg("https://api.github.com/repos/evandervecht/hangar/releases/latest")
         .output()
         .map_err(|e| format!("curl: {e}"))?;
@@ -1183,8 +1195,10 @@ fn open(path: &str) {
 
 /// Reopen a session in its own tool, in a new terminal window in the folder it started in.
 fn resume(s: &scan::Resumable) -> Result<(), String> {
-    // The id comes from a log file and goes through a shell: only ids made of id characters.
+    // The id comes from a log file and goes through a shell: only ids made of id characters,
+    // and never one the tool would read as a flag.
     if s.session.is_empty()
+        || s.session.starts_with('-')
         || !s
             .session
             .chars()
@@ -1273,12 +1287,24 @@ fn resume_refuses_ids_a_shell_would_read() {
         last: String::new(),
         cwd: ".".into(),
     };
-    for bad in ["", "a&calc", "a b", "a\"b", "a;rm"] {
+    for bad in ["", "a&calc", "a b", "a\"b", "a;rm", "-x", "--help"] {
         assert!(
             resume(&s(bad))
                 .unwrap_err()
                 .starts_with("unexpected session id")
         );
+    }
+}
+
+#[test]
+fn update_check_stays_on_https_and_small() {
+    let args = CURL_ARGS.join(" ");
+    for want in [
+        "--proto =https",
+        "--proto-redir =https",
+        "--max-filesize 1M",
+    ] {
+        assert!(args.contains(want), "{want} missing from {args}");
     }
 }
 

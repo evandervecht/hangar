@@ -80,7 +80,7 @@ Examples: `Temp` hides `…\Local\Temp\…` but not `templates`. `plugins/cache`
 |---|---|
 | Type | whole number, 1 to 1440 |
 | Default | `15` |
-| Effect | minutes between background scans |
+| Effect | minutes between background scans; a value outside 1 to 1440 is read as the nearest end |
 
 ## Other files in the data folder
 
