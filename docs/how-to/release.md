@@ -22,7 +22,7 @@ git push origin v0.2.0
 
 A tag with a hyphen (`v0.8.1-rc.1`) makes a pre-release: use it to test a release, then delete it with `gh release delete <tag> --cleanup-tag`.
 
-`.github/workflows/release.yml` creates the GitHub release with generated notes and attaches:
+`.github/workflows/release.yml` creates the GitHub release as a draft with generated notes, attaches the files below, attests their build provenance, and only then publishes it. A failed build leaves a draft, never a half-filled public release (delete it with `gh release delete <tag> --cleanup-tag` and tag again):
 
 | File | Contains |
 |---|---|
