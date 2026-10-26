@@ -161,7 +161,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The release stays a draft until every build and the checksums are uploaded.
+      # The release stays a draft until every build, the checksums and the attestations are done.
       - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}
