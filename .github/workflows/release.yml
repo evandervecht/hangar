@@ -140,7 +140,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # the release is still a draft, which only push access can read
+      id-token: write
+      attestations: write
     steps:
       - name: SHA256SUMS for every release file
         run: |
@@ -149,24 +151,12 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-
-  attest:
-    needs: checksums
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'hangar-*' --pattern SHA256SUMS --dir assets
-        env:
-          GH_TOKEN: ${{ github.token }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: assets/*
 
   publish:
-    needs: attest
+    needs: checksums
     runs-on: ubuntu-latest
     permissions:
       contents: write
