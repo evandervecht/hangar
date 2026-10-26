@@ -91,9 +91,9 @@ Only new/changed log files are re-imported. History is never purged.
   SHA-256 pinned; installers build `--locked`; Dependabot `cooldown` 7 days.
 
 ## Deferred
-Next: a signed Windows installer.
+Next: v1.0.0, starting with a public beta.
 Cursor sessions once its format is verified.
 Maybe later (CMDB): change history per project; owner/client field; several machines merged offline (export/import file).
-Later: rendered markdown, more AI tools.
+Later: signed Windows builds (once Hangar has more users), rendered markdown, more AI tools.
 Not planned: cost or token counts, conversation search, session memory, handing a session to another
 tool or model, launching agents (Hangar isn't a launcher; AgentsView covers sessions and cost).
