@@ -86,6 +86,9 @@ Only new/changed log files are re-imported. History is never purged.
   itself, and runs again at trash time; **Move … files** re-checks each log's age; Unix data folder `0700`, `hangar.db`
   and `config.toml` `0600`; `config.toml.tmp` is created fresh (never through a symlink); scratchpads skip symlinks and
   other users' folders; the project walk stops at home and at folders another account owns; the `.desktop` `Exec` is escaped.
+- Release hardening (#20): the release stays a draft until every file is uploaded, then a final job publishes it; build
+  provenance attestations (`gh attestation verify`); empty `APPLE_TEAM_ID` fails the sign step; Rust 1.95.0 and the Apple CA
+  SHA-256 pinned; installers build `--locked`; Dependabot `cooldown` 7 days.
 
 ## Deferred
 Next: a signed Windows installer.

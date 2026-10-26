@@ -1,7 +1,7 @@
 # Build Hangar and install it for the current user (Windows).
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-cargo build --release
+cargo build --release --locked
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
 $bin = Join-Path $env:LOCALAPPDATA 'Programs\hangar'

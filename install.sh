@@ -2,7 +2,7 @@
 # Build Hangar and install it for the current user (macOS, Linux).
 set -e
 cd "$(dirname "$0")"
-cargo build --release
+cargo build --release --locked
 
 mkdir -p "$HOME/.local/bin"
 cp target/release/hangar "$HOME/.local/bin/hangar"

@@ -21,7 +21,7 @@ jobs:
     steps:
       - run: |
           pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes $pre
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes --draft $pre
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -48,7 +48,7 @@ jobs:
           persist-credentials: false # build scripts of dependencies must not find a token in .git/config
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.95.0 # pinned for releases; CI stays on stable
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
@@ -78,6 +78,7 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/cert.p12"
           curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 -c -
           security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$kc"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pw" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
@@ -89,7 +90,8 @@ jobs:
             sh packaging/macos-app.sh target/${{ matrix.target }}/release/hangar "${GITHUB_REF_NAME#v}" out
           codesign --verify --strict --verbose=2 out/Hangar.app
           info="$(codesign -dv out/Hangar.app 2>&1)"
-          grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
+          [ -n "$APPLE_TEAM_ID" ] || { echo "APPLE_TEAM_ID secret is empty"; exit 1; }
+          grep -qx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$info"
       - name: Notarize (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 330
@@ -145,5 +147,31 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'hangar-*' --dir assets
           cd assets && sha256sum hangar-* > SHA256SUMS && cat SHA256SUMS
           gh release upload "$GITHUB_REF_NAME" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  attest:
+    needs: checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'hangar-*' --pattern SHA256SUMS --dir assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+
+  publish:
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The release stays a draft until every build and the checksums are uploaded.
+      - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}

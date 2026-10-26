@@ -19,3 +19,13 @@ Your file should show `OK`.
 ```
 
 Compare the output with the line for that file in `SHA256SUMS`. They must match exactly.
+
+## Check where it was built
+
+`SHA256SUMS` sits in the same release as the files, so it only catches a damaged download. Each file also has a build provenance attestation that says which workflow built it. With the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify hangar-0.8.2-darwin-arm64.tar.gz --repo evandervecht/hangar
+```
+
+It prints `Verification succeeded` when the file was built by Hangar's release workflow.
