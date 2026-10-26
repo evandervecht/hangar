@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "hangar"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "eframe",
  "rusqlite",
