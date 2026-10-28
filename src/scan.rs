@@ -1176,7 +1176,7 @@ pub fn csv(rows: &[Row]) -> String {
     };
     let opt = |n: Option<i64>| n.map_or(String::new(), |n| n.to_string());
     let mut out = String::from(
-        "path,name,status,tags,notes,origin,clones,stack,git_changed,git_unpushed,git_last_commit,at_risk,missing,tools,sessions,active_hours,week_hours,first_seen,last_active,description,git_stashed\r\n",
+        "path,name,status,tags,notes,origin,clones,stack,git_changed,git_unpushed,git_last_commit,at_risk,missing,tools,sessions,active_hours,week_hours,first_seen,last_active,description,git_stashed,disk_bytes\r\n",
     );
     for r in rows {
         let fields = [
@@ -2005,9 +2005,10 @@ mod tests {
         assert_eq!(dir_size(&dir.join("nope")), 0);
         fs::remove_dir_all(&dir).unwrap();
 
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch(SCHEMA).unwrap();
-        db.execute_batch("PRAGMA user_version = 5;").unwrap();
+        // a v5 database: every column up to git_stashed, no disk_bytes yet
+        let db = test_db();
+        db.execute_batch("ALTER TABLE projects DROP COLUMN disk_bytes; PRAGMA user_version = 5;")
+            .unwrap();
         add_project(&db, "/p", "no git");
         migrate(&db).unwrap();
         db.execute("UPDATE projects SET disk_bytes = 42", [])
