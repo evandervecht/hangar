@@ -58,7 +58,7 @@ fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(LINES)
 }
 
-const VERSION: i64 = 5;
+const VERSION: i64 = 6;
 
 fn migrate(db: &Connection) -> rusqlite::Result<()> {
     let version = |db: &Connection| db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0));
@@ -113,6 +113,14 @@ fn migrate(db: &Connection) -> rusqlite::Result<()> {
         )?;
         if v < 5 && !has_stashed {
             db.execute("ALTER TABLE projects ADD COLUMN git_stashed INTEGER", [])?;
+        }
+        let has_disk = db.query_row(
+            "SELECT count(*) FROM pragma_table_info('projects') WHERE name = 'disk_bytes'",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+        if !has_disk {
+            db.execute("ALTER TABLE projects ADD COLUMN disk_bytes INTEGER", [])?;
         }
         let converted = has_events(db)?;
         if converted {
@@ -254,8 +262,19 @@ pub fn run(
         .iter()
         .filter(|p| Path::new(p).join(".git").exists() && !excluded(p, excludes))
         .collect();
-    let health = git_health_all(&repos);
+    let health = par_map(&repos, |p| git_health(Path::new(p)));
+    let present: Vec<&String> = projects
+        .iter()
+        .filter(|p| Path::new(p).is_dir() && !excluded(p, excludes))
+        .collect();
+    let sizes = par_map(&present, |p| dir_size(Path::new(p)));
     let tx = db.transaction()?;
+    for (p, n) in present.iter().zip(sizes) {
+        tx.execute(
+            "UPDATE projects SET disk_bytes = ?2 WHERE path = ?1",
+            params![p, n],
+        )?;
+    }
     for (p, g) in repos.iter().zip(health) {
         tx.execute(
             "UPDATE projects SET git_changed = ?2, git_unpushed = ?3, git_stashed = ?4, git_last_commit = ?5
@@ -857,6 +876,8 @@ pub struct Row {
     pub git_stashed: Option<i64>,
     pub git_last_commit: Option<String>,
     pub stack: String,
+    /// Bytes of files in the folder (symlinks not followed); None until scanned or when the folder is gone.
+    pub disk_bytes: Option<i64>,
     /// Other visible projects with the same origin repo.
     pub clones: usize,
     pub at_risk: bool,
@@ -873,7 +894,7 @@ SELECT p.path, p.name, p.origin, p.description, p.missing, p.tags, p.status, p.n
   coalesce(a.total, 0), coalesce(a.week, 0),
   CASE WHEN p.status <> '' THEN p.status
        WHEN julianday(a.last) >= julianday('now', '-14 days') THEN 'active' ELSE 'idle' END,
-  p.git_changed, p.git_unpushed, p.git_last_commit, p.stack, p.git_stashed
+  p.git_changed, p.git_unpushed, p.git_last_commit, p.stack, p.git_stashed, p.disk_bytes
 FROM projects p LEFT JOIN a ON a.project = p.path
 ORDER BY coalesce(a.last, '') DESC, p.name";
 
@@ -902,6 +923,7 @@ pub fn list(db: &Connection, excludes: &[String]) -> rusqlite::Result<Vec<Row>> 
             git_last_commit: r.get(17)?,
             stack: r.get(18)?,
             git_stashed: r.get(19)?,
+            disk_bytes: r.get(20)?,
             clones: 0,
             at_risk: false,
         })
@@ -984,26 +1006,37 @@ pub fn origin_key(origin: &str) -> Option<String> {
     key.contains('/').then_some(key)
 }
 
-/// (changed files, unpushed commits, last commit time) per repo, in parallel: git is slow to start on Windows.
-fn git_health_all(repos: &[&String]) -> Vec<GitHealth> {
+/// `f` over `items` in parallel, in order: git is slow to start on Windows and folder walks wait on disk.
+fn par_map<T: Send>(items: &[&String], f: impl Fn(&String) -> T + Sync) -> Vec<T> {
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
-    let chunk = repos.len().div_ceil(workers).max(1);
+    let chunk = items.len().div_ceil(workers).max(1);
+    let f = &f;
     std::thread::scope(|s| {
-        let handles: Vec<_> = repos
+        let handles: Vec<_> = items
             .chunks(chunk)
-            .map(|c| {
-                s.spawn(move || {
-                    c.iter()
-                        .map(|p| git_health(Path::new(p)))
-                        .collect::<Vec<_>>()
-                })
-            })
+            .map(|c| s.spawn(move || c.iter().map(|p| f(p)).collect::<Vec<_>>()))
             .collect();
         handles
             .into_iter()
-            .flat_map(|h| h.join().expect("git health worker panicked"))
+            .flat_map(|h| h.join().expect("scan worker panicked"))
             .collect()
     })
+}
+
+/// Total bytes of the files under `dir`; symlinks are not followed, unreadable entries count as 0.
+/// shortcut: walks node_modules and target too (that is the disk they use); slow on huge trees, cache by mtime if it hurts.
+fn dir_size(dir: &Path) -> i64 {
+    let (mut total, mut todo) = (0, vec![dir.to_path_buf()]);
+    while let Some(d) = todo.pop() {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            match e.metadata() {
+                Ok(m) if m.is_dir() => todo.push(e.path()),
+                Ok(m) if m.is_file() => total += m.len() as i64,
+                _ => {}
+            }
+        }
+    }
+    total
 }
 
 /// What `git` says about a repo; each field None when git couldn't tell.
@@ -1168,6 +1201,7 @@ pub fn csv(rows: &[Row]) -> String {
             q(&r.last_active),
             q(&r.description),
             opt(r.git_stashed), // new columns go at the end: scripts may read columns by position
+            opt(r.disk_bytes),
         ];
         out.push_str(&fields.join(","));
         out.push_str("\r\n");
@@ -1958,6 +1992,28 @@ mod tests {
             ("https://h/a/gone", "kept")
         );
         fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn disk_size_sums_files_and_migration_adds_column() {
+        let dir = std::env::temp_dir().join("hangar-disk-size-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("a.txt"), "12345").unwrap();
+        fs::write(dir.join("sub").join("b.txt"), "123").unwrap();
+        assert_eq!(dir_size(&dir), 8);
+        assert_eq!(dir_size(&dir.join("nope")), 0);
+        fs::remove_dir_all(&dir).unwrap();
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        db.execute_batch("PRAGMA user_version = 5;").unwrap();
+        add_project(&db, "/p", "no git");
+        migrate(&db).unwrap();
+        db.execute("UPDATE projects SET disk_bytes = 42", [])
+            .unwrap();
+        assert_eq!(list(&db, &[]).unwrap()[0].disk_bytes, Some(42));
+        assert!(csv(&list(&db, &[]).unwrap()).contains(",disk_bytes\r\n"));
     }
 
     #[test]

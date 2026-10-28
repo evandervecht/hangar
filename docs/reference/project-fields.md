@@ -12,6 +12,7 @@ Hover a column header (**ℹ**) in the window for a short version of this table.
 | Git | automatic | see [Git](#git) |
 | Stack | automatic | see [Stack](#stack) |
 | Clones | automatic | how many other visible projects have the same origin repo; empty when none |
+| Size | automatic | bytes of the files in the project folder (subfolders included, symlinks not followed), refreshed on every scan; empty until scanned or when the folder is gone. Counts `node_modules` and `target` too |
 | Tags | manual | free text |
 | Tools | automatic | AI tools with sessions here: `claude`, `codex`, `gemini`, `hermes` |
 | Sessions | automatic | number of distinct sessions |
@@ -98,17 +99,17 @@ Clones are matched on the origin regardless of URL style: `git@host:a/b.git`, `h
 
 `hangar list --json` and `--csv` contain:
 
-`path`, `name`, `status` (CSV: the shown status; JSON: `status` is your manual value and `shown_status` the displayed one), `tags`, `notes`, `origin`, `clones`, `stack`, `git_changed`, `git_unpushed`, `git_last_commit`, `at_risk`, `missing`, `tools`, `sessions`, active time (JSON: `active_secs`, `week_secs`; CSV: `active_hours`, `week_hours`), `first_seen`, `last_active`, `description`, `git_stashed` (v0.8.2; last in CSV).
+`path`, `name`, `status` (CSV: the shown status; JSON: `status` is your manual value and `shown_status` the displayed one), `tags`, `notes`, `origin`, `clones`, `stack`, `git_changed`, `git_unpushed`, `git_last_commit`, `at_risk`, `missing`, `tools`, `sessions`, active time (JSON: `active_secs`, `week_secs`; CSV: `active_hours`, `week_hours`), `first_seen`, `last_active`, `description`, `git_stashed` (v0.8.2), `disk_bytes` (v0.8.3; last in CSV).
 
 Unknown git values are `null` in JSON and empty in CSV.
 
 ## Database
 
-`hangar.db` is SQLite, schema version 4 (`PRAGMA user_version`).
+`hangar.db` is SQLite, schema version 6 (`PRAGMA user_version`).
 
 | Table | Columns |
 |---|---|
-| `projects` | `path` (key), `name`, `origin`, `description`, `missing`, `host`, `first_seen`, `tags`, `status`, `notes`, `git_changed`, `git_unpushed`, `git_last_commit`, `stack`, `git_stashed` |
+| `projects` | `path` (key), `name`, `origin`, `description`, `missing`, `host`, `first_seen`, `tags`, `status`, `notes`, `git_changed`, `git_unpushed`, `git_last_commit`, `stack`, `git_stashed`, `disk_bytes` |
 | `activity` | `file`, `project`, `tool`, `session`, `day`, `first`, `last`, `secs` (one row per session per UTC day; `secs` is active time with idle gaps left out) |
 | `files` | `path` (key), `mtime`, `size` (one row per imported log file) |
 | `moves` | `from_path` (key), `to_path` (one row per merged project) |
