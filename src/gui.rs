@@ -740,6 +740,9 @@ impl eframe::App for App {
         if ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_KEY)) {
             self.open_settings();
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&RESCAN_KEY)) {
+            self.start_scan();
+        }
         // A second `hangar` start leaves this file and exits; bring this window forward instead.
         let request = self.data_dir.join("show-request");
         if request.exists() {
@@ -817,8 +820,12 @@ impl eframe::App for App {
                 ui.text_edit_singleline(&mut self.filter);
                 ui.checkbox(&mut self.at_risk_only, "At risk only")
                     .on_hover_text("No git, no remote, uncommitted changes or unpushed commits");
+                let rescan_key = ui.ctx().format_shortcut(&RESCAN_KEY);
                 if ui
-                    .add_enabled(!scanning, egui::Button::new("Rescan"))
+                    .add_enabled(
+                        !scanning,
+                        egui::Button::new("Rescan").shortcut_text(rescan_key),
+                    )
                     .clicked()
                 {
                     self.start_scan();
@@ -1144,6 +1151,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ⌘, on macOS, Ctrl+, elsewhere.
 const SETTINGS_KEY: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Comma);
+/// ⌘R on macOS, Ctrl+R elsewhere; `start_scan` ignores it while a scan runs.
+const RESCAN_KEY: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
 const RELEASES_URL: &str = "https://github.com/evandervecht/hangar/releases/latest";
 /// HTTPS only, redirects included, and no more than a release's JSON.
 const CURL_ARGS: &[&str] = &[
@@ -1243,6 +1253,12 @@ fn terminal_script(cwd: &str, cmd: &str) -> String {
     let sh = format!("cd '{}' && {cmd}", cwd.replace('\'', r"'\''"));
     let line = sh.replace('\\', r"\\").replace('"', r#"\""#);
     format!("tell application \"Terminal\"\nactivate\ndo script \"{line}\"\nend tell")
+}
+
+#[test]
+fn rescan_key_is_not_the_settings_key() {
+    assert_ne!(RESCAN_KEY, SETTINGS_KEY);
+    assert_eq!(RESCAN_KEY.logical_key, egui::Key::R);
 }
 
 #[test]
