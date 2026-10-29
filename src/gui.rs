@@ -19,7 +19,7 @@ const THEMES: [(&str, &str); 4] = [
 const UNKNOWN_GIT: &str = "Git couldn't read this repo, often 'dubious ownership' (the folder belongs to another user). Run `git status` in it to see why.";
 
 /// Table columns and what each means, shown when hovering the header (docs/reference/project-fields.md).
-const COLUMNS: [(&str, &str); 13] = [
+const COLUMNS: [(&str, &str); 14] = [
     (
         "Project",
         "Folder name; (missing) when the folder no longer exists.",
@@ -49,6 +49,10 @@ const COLUMNS: [(&str, &str); 13] = [
     (
         "Clones",
         "Other projects that are checkouts of the same repo.",
+    ),
+    (
+        "Size",
+        "Disk used by the files in the project folder, node_modules and target included. Symlinks aren't followed.",
     ),
     ("Tags", "Your own labels, set in the detail panel."),
     (
@@ -936,6 +940,7 @@ impl eframe::App for App {
                             } else {
                                 String::new()
                             });
+                            ui.label(r.disk_bytes.map_or(String::new(), disk_size));
                             ui.label(&r.tags);
                             ui.label(&r.tools);
                             ui.label(r.sessions.to_string());
@@ -1140,6 +1145,15 @@ fn apply_theme(ctx: &egui::Context, theme: &str) {
             ctx.set_theme(ThemePreference::Dark);
         }
         _ => ctx.set_theme(ThemePreference::System),
+    }
+}
+
+/// "812 MB", "1.4 GB": decimal units, one decimal from GB up.
+pub fn disk_size(bytes: i64) -> String {
+    match bytes as f64 {
+        b if b >= 1e9 => format!("{:.1} GB", b / 1e9),
+        b if b >= 1e6 => format!("{:.0} MB", b / 1e6),
+        b => format!("{:.0} KB", b / 1e3),
     }
 }
 

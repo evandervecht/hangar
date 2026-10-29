@@ -91,6 +91,9 @@ Only new/changed log files are re-imported. History is never purged.
   SHA-256 pinned; installers build `--locked`; Dependabot `cooldown` 7 days.
 - Rescan has a shortcut: Ctrl+R, ⌘R on macOS (shown on the button; ignored while a scan runs).
 
+## v0.8.3 additions
+- Disk size per project (schema 6, `disk_bytes`): bytes of the files in the folder, refreshed each scan; **Size** column; exported last in CSV and in JSON.
+
 ## Deferred
 Next: v1.0.0, starting with a public beta.
 Cursor sessions once its format is verified.
