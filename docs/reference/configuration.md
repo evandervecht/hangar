@@ -17,7 +17,7 @@ Deleting `hangar.db` (with Hangar closed) rebuilds it from the logs that still e
 
 ## config.toml
 
-The **Settings** window edits `roots` and `excludes`; **Save and rescan** writes the file and scans again. Open it with **Hangar → Settings…** in the menu bar, ⌘, on macOS or Ctrl+, on Windows and Linux; on macOS it's also in the Hangar menu of the Mac menu bar. Its bottom line shows the running version (like `hangar --version`) and **Check for updates** (also **Hangar → Check for updates**), which asks GitHub for the latest release and links to it when it's newer. Hangar never checks by itself. **View → Theme** writes `theme`. Changes made to the file by hand take effect on the next launch. A key left out takes its default. If the file can't be read, Hangar doesn't start and writes the reason to `hangar.log`.
+The **Settings** window edits `roots` and `excludes`; **Save and rescan** writes the file and scans again. Open it with **Hangar → Settings…** in the menu bar, ⌘, on macOS or Ctrl+, on Windows and Linux; on macOS it's also in the Hangar menu of the Mac menu bar. Its bottom line shows the running version (like `hangar --version`) and **Check for updates** (also **Hangar → Check for updates**), which asks GitHub for the latest release and links to it when it's newer. Hangar never checks by itself. **Rescan** also runs on Ctrl+R (⌘R on macOS). **View → Theme** writes `theme`. Changes made to the file by hand take effect on the next launch. A key left out takes its default. If the file can't be read, Hangar doesn't start and writes the reason to `hangar.log`.
 
 ```toml
 roots = ['C:\Users\you\Projects']
