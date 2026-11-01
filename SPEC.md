@@ -94,6 +94,10 @@ Only new/changed log files are re-imported. History is never purged.
 - Rescan has a shortcut: Ctrl+R, ⌘R on macOS (shown on the button; ignored while a scan runs).
 - Disk size per project (schema 6, `disk_bytes`): bytes of the files in the folder, refreshed each scan; **Size** column; exported last in CSV and in JSON.
 
+## v0.8.4 additions
+- Resume opens the terminal set in `terminal` (Settings → Terminal, warns when not in PATH): a program and its arguments,
+  the tool's command appended as separate arguments, no shell. Empty keeps cmd / Terminal; set, it also works on Linux.
+
 ## Deferred
 Next: v1.0.0, starting with a public beta.
 Cursor sessions once its format is verified.

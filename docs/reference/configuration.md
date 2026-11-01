@@ -82,6 +82,18 @@ Examples: `Temp` hides `…\Local\Temp\…` but not `templates`. `plugins/cache`
 | Default | `15` |
 | Effect | minutes between background scans; a value outside 1 to 1440 is read as the nearest end |
 
+### terminal
+
+The terminal **Resume a session** opens. Set it in **Settings → Terminal**, which warns when the program isn't found in PATH.
+
+| | |
+|---|---|
+| Type | string: a program and its arguments, separated by spaces |
+| Default | `""`: cmd on Windows, Terminal on macOS; on Linux Resume shows the command to run instead |
+| Effect | runs the program in the session's folder with the tool's command added at the end as separate arguments (`claude --resume <id>` or `codex resume <id>`), never through a shell |
+
+Examples: `wt -d . cmd /k` (Windows Terminal; `cmd /k` finds `claude.cmd` and keeps the tab open), `alacritty -e`, `kitty`, `wezterm start --`, `gnome-terminal --`. Spaces split arguments, so use a program on PATH rather than a path with spaces in it.
+
 ## Other files in the data folder
 
 | File | Holds |
