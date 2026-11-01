@@ -36,7 +36,7 @@ Type part of a project name into **Filter** and watch the table shrink.
 
 Click a project name. A panel opens on the right with the full path, git origin, session count and the whole README.
 
-Click **Open folder** to see it in Explorer or Finder. If the project has a GitHub origin, click **Open origin** to open it in your browser. Under **Resume a session**, click one of its last Claude Code or Codex sessions to continue it in a new terminal.
+Click **Open folder** to see it in Explorer or Finder. If the project has a GitHub origin, click **Open origin** to open it in your browser. Under **Resume a session**, click one of its last Claude Code or Codex sessions to continue it in a new terminal. **Settings → Terminal** picks which terminal opens.
 
 ## 5. Record what you know
 

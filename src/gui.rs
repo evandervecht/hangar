@@ -385,6 +385,17 @@ impl App {
                     ui.label("minutes");
                 });
                 ui.separator();
+                ui.strong("Terminal");
+                ui.weak("Opens Resume a session; the tool's command is added at the end, e.g. wt -d . cmd /k. Empty: cmd on Windows, Terminal on macOS.");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut draft.terminal).desired_width(400.0));
+                    if let Some(program) = draft.terminal.split_whitespace().next()
+                        && !on_path(program)
+                    {
+                        ui.colored_label(ui.visuals().warn_fg_color, "not found in PATH");
+                    }
+                });
+                ui.separator();
                 ui.horizontal(|ui| {
                     save = ui.button("Save and rescan").clicked();
                     cancel = ui.button("Cancel").clicked();
@@ -620,7 +631,7 @@ impl App {
                                 .on_hover_text(format!("Opens a terminal in {}", s.cwd))
                                 .clicked()
                             {
-                                self.message = match resume(s) {
+                                self.message = match resume(s, &self.cfg.terminal) {
                                     Ok(()) => format!("resuming {tool} session {}", s.session),
                                     Err(e) => format!("resume failed: {e}"),
                                 };
@@ -1218,7 +1229,17 @@ fn open(path: &str) {
 }
 
 /// Reopen a session in its own tool, in a new terminal window in the folder it started in.
-fn resume(s: &scan::Resumable) -> Result<(), String> {
+fn resume(s: &scan::Resumable, terminal: &str) -> Result<(), String> {
+    resume_command(s, terminal)?
+        .current_dir(&s.cwd)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// `terminal` (Settings) is a program plus its arguments; the tool's words go after it as separate
+/// arguments, never through a shell. Empty: the platform's own terminal.
+fn resume_command(s: &scan::Resumable, terminal: &str) -> Result<std::process::Command, String> {
     // The id comes from a log file and goes through a shell: only ids made of id characters,
     // and never one the tool would read as a flag.
     if s.session.is_empty()
@@ -1230,34 +1251,56 @@ fn resume(s: &scan::Resumable) -> Result<(), String> {
     {
         return Err(format!("unexpected session id {:?}", s.session));
     }
-    let cmd = match s.tool.as_str() {
-        "claude" => format!("claude --resume {}", s.session),
-        "codex" => format!("codex resume {}", s.session),
+    let words = match s.tool.as_str() {
+        "claude" => ["claude", "--resume", &s.session],
+        "codex" => ["codex", "resume", &s.session],
         t => return Err(format!("{t} sessions can't be resumed")),
     };
+    // shortcut: split on whitespace, so a program path with spaces doesn't work; add quoting if users need it.
+    let mut prefix = terminal.split_whitespace();
+    if let Some(program) = prefix.next() {
+        let mut c = std::process::Command::new(program);
+        c.args(prefix).args(words);
+        return Ok(c);
+    }
+    let cmd = words.join(" ");
     #[cfg(windows)]
-    let mut c = {
+    let c = {
         use std::os::windows::process::CommandExt;
         // start's first quoted argument is the window title.
         let mut c = scan::quiet_cmd("cmd");
         c.raw_arg(format!("/C start \"Hangar\" cmd /K {cmd}"));
-        c
+        Ok(c)
     };
     #[cfg(target_os = "macos")]
-    let mut c = {
+    let c = {
         let mut c = std::process::Command::new("osascript");
         c.args(["-e", &terminal_script(&s.cwd, &cmd)]);
-        c
+        Ok(c)
     };
     #[cfg(not(any(windows, target_os = "macos")))]
-    let result = Err(format!("run `{cmd}` in {}", s.cwd));
-    #[cfg(any(windows, target_os = "macos"))]
-    let result = c
-        .current_dir(&s.cwd)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string());
-    result
+    let c = Err(format!(
+        "run `{cmd}` in {}, or set a terminal in Settings",
+        s.cwd
+    ));
+    c
+}
+
+/// `program` is a file, or a name found in PATH (with a PATHEXT extension on Windows).
+fn on_path(program: &str) -> bool {
+    let p = Path::new(program);
+    if p.components().count() > 1 {
+        return p.is_file();
+    }
+    let mut exts = vec![String::new()];
+    if cfg!(windows) {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into());
+        exts.extend(pathext.split(';').map(String::from));
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).any(|dir| {
+        exts.iter()
+            .any(|e| dir.join(format!("{program}{e}")).is_file())
+    })
 }
 
 /// AppleScript that runs `cmd` in `cwd` in a new Terminal window. `cwd` comes from a log file:
@@ -1319,11 +1362,35 @@ fn resume_refuses_ids_a_shell_would_read() {
     };
     for bad in ["", "a&calc", "a b", "a\"b", "a;rm", "-x", "--help"] {
         assert!(
-            resume(&s(bad))
+            resume(&s(bad), "")
                 .unwrap_err()
                 .starts_with("unexpected session id")
         );
     }
+}
+
+#[test]
+fn resume_uses_the_configured_terminal() {
+    let s = scan::Resumable {
+        tool: "codex".into(),
+        session: "abc-1".into(),
+        last: String::new(),
+        cwd: ".".into(),
+    };
+    let c = resume_command(&s, "  wt -d .  cmd /k ").unwrap();
+    assert_eq!(c.get_program(), "wt");
+    let args: Vec<_> = c.get_args().collect();
+    assert_eq!(args, ["-d", ".", "cmd", "/k", "codex", "resume", "abc-1"]);
+}
+
+#[test]
+fn on_path_finds_programs() {
+    let exe = std::env::current_exe().unwrap();
+    assert!(on_path(exe.to_str().unwrap()));
+    assert!(!on_path("hangar-no-such-terminal"));
+    assert!(!on_path("./hangar-no-such-terminal"));
+    // Found by name alone, with PATHEXT on Windows.
+    assert!(on_path(if cfg!(windows) { "cmd" } else { "sh" }));
 }
 
 #[test]

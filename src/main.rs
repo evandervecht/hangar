@@ -29,6 +29,10 @@ pub struct Config {
     /// Minutes between background scans.
     #[serde(default = "default_scan_minutes")]
     pub scan_minutes: u64,
+    /// Command that opens a terminal for Resume, e.g. "wt -d ." or "alacritty -e"; the tool's
+    /// command is appended. Empty: cmd on Windows, Terminal on macOS.
+    #[serde(default)]
+    pub terminal: String,
 }
 
 fn default_scan_minutes() -> u64 {
@@ -368,6 +372,7 @@ mod tests {
         assert_eq!(cfg.excludes, crate::default_excludes());
         assert!(cfg.roots[0].ends_with("Projects"));
         assert_eq!(cfg.scan_minutes, 15);
+        assert_eq!(cfg.terminal, "");
         let path = std::env::temp_dir().join("hangar-config-test.toml");
         // A file that isn't UTF-8 is an error, never replaced by defaults.
         std::fs::write(&path, b"\xff").unwrap();
