@@ -58,5 +58,5 @@ jobs:
         # Secrets are gitleaks' job; --ignore-unfixed so a CVE without a fix doesn't block every PR.
         run: >-
           docker run --rm -v "$PWD:/repo"
-          ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
+          ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
           fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 /repo
