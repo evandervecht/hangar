@@ -1608,10 +1608,18 @@ mod tests {
         .unwrap();
         fold(&db, "lines").unwrap();
         let d = dest.to_string_lossy().to_string();
-        // Into itself, or onto an existing folder: refused, nothing moves.
-        assert!(move_folder(&mut db, &from, &from, &home, &[], &data).is_err());
+        // Into itself, into a folder inside itself, or onto an existing folder: refused, nothing moves.
+        let sub = src.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let err = move_folder(&mut db, &from, &from, &home, &[], &data).unwrap_err();
+        assert!(err.contains("into itself"), "{err}");
+        let err =
+            move_folder(&mut db, &from, &sub.to_string_lossy(), &home, &[], &data).unwrap_err();
+        assert!(err.contains("into itself"), "{err}");
+        assert!(src.is_dir() && sub.is_dir());
         fs::create_dir_all(dest.join("app")).unwrap();
-        assert!(move_folder(&mut db, &from, &d, &home, &[], &data).is_err());
+        let err = move_folder(&mut db, &from, &d, &home, &[], &data).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
         assert!(src.is_dir());
         fs::remove_dir(dest.join("app")).unwrap();
 
