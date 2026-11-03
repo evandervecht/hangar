@@ -1249,19 +1249,25 @@ const CURL_ARGS: &[&str] = &[
 /// Version of the latest GitHub release. Uses the curl that ships with Windows 10+ and macOS, so
 /// Hangar needs no HTTP library; it only runs when the user clicks "Check for updates".
 fn latest_release() -> Result<String, String> {
+    // The web redirect, not api.github.com: the API allows 60 unauthenticated calls an hour per IP
+    // and answers 403 once a shared office or VPN address has used them (#41).
     let out = scan::quiet_cmd("curl")
         .args(CURL_ARGS)
-        .arg("https://api.github.com/repos/evandervecht/hangar/releases/latest")
+        .args(["-I", "-w", "%{url_effective}", RELEASES_URL])
         .output()
         .map_err(|e| format!("curl: {e}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
-    v["tag_name"]
-        .as_str()
-        .map(|t| t.trim_start_matches('v').to_string())
-        .ok_or_else(|| "no release found".into())
+    release_tag(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| "no release found".into())
+}
+
+/// curl's output is the response headers, then the URL `releases/latest` redirected to:
+/// `…/releases/tag/v1.2.3` when there's a release.
+fn release_tag(out: &str) -> Option<String> {
+    let url = out.lines().last()?;
+    let tag = url.rsplit_once("/releases/tag/")?.1.trim();
+    (!tag.is_empty()).then(|| tag.trim_start_matches('v').to_string())
 }
 
 /// `latest` is a higher a.b.c than `current`; a part that isn't a number counts as 0.
@@ -1456,6 +1462,23 @@ fn update_check_stays_on_https_and_small() {
     ] {
         assert!(args.contains(want), "{want} missing from {args}");
     }
+}
+
+#[test]
+fn release_tag_reads_the_redirect() {
+    let headers = "HTTP/1.1 302 Found\r\nLocation: x\r\n\r\nHTTP/1.1 200 OK\r\n\r\n";
+    let url = "https://github.com/evandervecht/hangar/releases/tag/v0.8.2";
+    assert_eq!(
+        release_tag(&format!("{headers}{url}")).as_deref(),
+        Some("0.8.2")
+    );
+    assert_eq!(release_tag(url).as_deref(), Some("0.8.2"));
+    // No release yet: `latest` lands on the releases list.
+    assert_eq!(
+        release_tag("https://github.com/evandervecht/hangar/releases"),
+        None
+    );
+    assert_eq!(release_tag(""), None);
 }
 
 #[test]

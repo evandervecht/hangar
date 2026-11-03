@@ -73,4 +73,4 @@ Scans run on a background thread with their own database connection, so the wind
 
 ## Privacy
 
-Everything stays on your machine. Hangar reads the logs and writes one local SQLite file. It doesn't connect to the network on its own: only when you choose **Check for updates** does it ask GitHub for the latest release version, over HTTPS only, sending nothing about your projects. Credentials and query strings in git remote URLs are stripped before they are stored.
+Everything stays on your machine. Hangar reads the logs and writes one local SQLite file. It doesn't connect to the network on its own: only when you choose **Check for updates** does it read the latest release version from the github.com release page, over HTTPS only, sending nothing about your projects. It doesn't use the GitHub API, so a shared IP can't run out of its rate limit. Credentials and query strings in git remote URLs are stripped before they are stored.

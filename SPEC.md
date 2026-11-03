@@ -100,6 +100,8 @@ Only new/changed log files are re-imported. History is never purged.
 - Clean → folder: **Delete permanently** and **Move folder** (into a typed folder, same drive/volume) next to Trash, behind
   the same typed name and `delete_guard`; a move takes the project's record, history and an old-path alias along (#42).
   The prompt shows the folder's size.
+- Check for updates reads the `releases/latest` redirect on github.com instead of the GitHub API, which answered 403
+  once a shared IP had used its 60 unauthenticated calls an hour (#41).
 
 ## Deferred
 Next: v1.0.0, starting with a public beta.
