@@ -97,6 +97,8 @@ Only new/changed log files are re-imported. History is never purged.
 ## v0.8.4 additions
 - Resume opens the terminal set in `terminal` (Settings → Terminal, warns when not in PATH): a program and its arguments,
   the tool's command appended as separate arguments, no shell. Empty keeps cmd / Terminal; set, it also works on Linux.
+- Check for updates reads the `releases/latest` redirect on github.com instead of the GitHub API, which answered 403
+  once a shared IP had used its 60 unauthenticated calls an hour (#41).
 
 ## Deferred
 Next: v1.0.0, starting with a public beta.
