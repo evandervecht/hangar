@@ -84,7 +84,7 @@ Already using [AgentsView](https://github.com/wesm/agentsview)? It helps you und
 - **Shows Claude's scratchpads:** the temporary folders Claude Code works in fold out under their project, like folders in Explorer or Finder.
 - **Exports:** `hangar list --json` or `--csv` for spreadsheets and scripts.
 - **Settings:** choose the project folders to scan and the paths to hide, right in the app.
-- **Cleans up:** forget missing projects, hide noise, and move old AI session logs or whole project folders to the Recycle Bin / Trash.
+- **Cleans up:** forget missing projects, hide noise, move old AI session logs or whole project folders to the Recycle Bin / Trash, delete a folder permanently, or move it elsewhere with its history.
 - **Runs in the background:** optionally lives in the tray, rescans on a timer and starts at login.
 - **Themes:** System, Dark, Light, or Hangar (navy with the logo's coral and cyan accents).
 

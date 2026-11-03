@@ -98,6 +98,8 @@ struct App {
     log_days: u64,
     old_logs: Option<(Vec<PathBuf>, u64)>,
     confirm_name: String,
+    /// Folder typed under Clean → Move into; kept between projects so several can go to one place.
+    move_to: String,
     /// Copy of the config being edited in Settings; None when the window is closed.
     settings: Option<Config>,
     data_dir: PathBuf,
@@ -126,6 +128,8 @@ enum Action {
     Hide,
     Forget,
     TrashFolder,
+    DeleteFolder,
+    MoveFolder,
     /// Merge the selected (missing) project into this path.
     Merge(String),
 }
@@ -156,6 +160,7 @@ pub fn run(
         log_days: 90,
         old_logs: None,
         confirm_name: String::new(),
+        move_to: String::new(),
         settings: None,
         data_dir,
         scan: None,
@@ -226,6 +231,7 @@ impl App {
         let Some(sel) = self.selected.clone() else {
             return;
         };
+        let permanent = matches!(action, Action::DeleteFolder);
         self.message = match action {
             Action::Save => match scan::save_manual(&self.db, &sel) {
                 Ok(()) => "saved".into(),
@@ -250,17 +256,39 @@ impl App {
                     Err(e) => format!("forget failed: {e}"),
                 }
             }
-            Action::TrashFolder => {
-                match scan::trash_folder(&sel.path, &self.home, &self.cfg.roots, &self.data_dir) {
+            Action::TrashFolder | Action::DeleteFolder => {
+                let (home, roots, data) = (&self.home, &self.cfg.roots, &self.data_dir);
+                let done = if permanent {
+                    scan::delete_folder(&sel.path, home, roots, data)
+                } else {
+                    scan::trash_folder(&sel.path, home, roots, data)
+                };
+                match done {
                     Ok(()) => {
                         self.selected = None;
                         let _ = self.db.execute(
                             "UPDATE projects SET missing = 1 WHERE path = ?1",
                             [&sel.path],
                         );
-                        format!("moved {} to the Recycle Bin / Trash", sel.path)
+                        if permanent {
+                            format!("deleted {}", sel.path)
+                        } else {
+                            format!("moved {} to the Recycle Bin / Trash", sel.path)
+                        }
                     }
                     Err(e) => format!("delete failed: {e}"),
+                }
+            }
+            Action::MoveFolder => {
+                let (home, roots, data) = (&self.home, &self.cfg.roots, &self.data_dir);
+                match scan::move_folder(&mut self.db, &sel.path, &self.move_to, home, roots, data) {
+                    Ok(to) => {
+                        self.selected = None;
+                        // Size, git facts and stack of the new path come from a scan.
+                        self.start_scan();
+                        format!("moved {} to {to}", sel.path)
+                    }
+                    Err(e) => format!("move failed: {e}"),
                 }
             }
             Action::Merge(to) => match scan::merge(&mut self.db, &sel.path, &to) {
@@ -693,19 +721,44 @@ impl App {
                                     format!("This folder holds work that isn't pushed anywhere ({}).", scan::git_label(sel)),
                                 );
                             }
+                            let size = sel
+                                .disk_bytes
+                                .map_or(String::new(), |b| format!(" ({})", disk_size(b)));
                             ui.label(format!(
-                                "Delete the folder: type \"{}\" to confirm.",
+                                "Delete or move the folder{size}: type \"{}\" to confirm.",
                                 sel.name
                             ));
                             ui.text_edit_singleline(&mut self.confirm_name);
+                            let confirmed = self.confirm_name == sel.name;
                             if ui
                                 .add_enabled(
-                                    self.confirm_name == sel.name,
+                                    confirmed,
                                     egui::Button::new("Move folder to Recycle Bin / Trash"),
                                 )
                                 .clicked()
                             {
                                 action = Some(Action::TrashFolder);
+                            }
+                            if ui
+                                .add_enabled(confirmed, egui::Button::new("Delete permanently"))
+                                .on_hover_text("Skips the Recycle Bin / Trash: this can't be undone")
+                                .clicked()
+                            {
+                                action = Some(Action::DeleteFolder);
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Move into folder");
+                                ui.text_edit_singleline(&mut self.move_to);
+                            });
+                            if ui
+                                .add_enabled(
+                                    confirmed && !self.move_to.trim().is_empty(),
+                                    egui::Button::new("Move folder"),
+                                )
+                                .on_hover_text("Same drive or volume only; sessions and notes follow")
+                                .clicked()
+                            {
+                                action = Some(Action::MoveFolder);
                             }
                         }
                     }

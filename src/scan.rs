@@ -1456,6 +1456,69 @@ pub fn trash_folder(path: &str, home: &Path, roots: &[String], data: &Path) -> R
     trash::delete(path).map_err(|e| e.to_string())
 }
 
+/// Delete a project folder for good, past the Recycle Bin / Trash. Same guard as `trash_folder`.
+pub fn delete_folder(path: &str, home: &Path, roots: &[String], data: &Path) -> Result<(), String> {
+    if let Some(why) = delete_guard(path, home, roots, data) {
+        return Err(why.to_string());
+    }
+    fs::remove_dir_all(path).map_err(|e| e.to_string())
+}
+
+/// Move a project folder into `dest` and let its record, history and old-path alias follow.
+/// Returns the new path. Same guard as `trash_folder`: the source leaves its place either way.
+pub fn move_folder(
+    db: &mut Connection,
+    path: &str,
+    dest: &str,
+    home: &Path,
+    roots: &[String],
+    data: &Path,
+) -> Result<String, String> {
+    if let Some(why) = delete_guard(path, home, roots, data) {
+        return Err(why.to_string());
+    }
+    let dest = PathBuf::from(normalize(dest.trim()));
+    let name = Path::new(path).file_name().ok_or("folder has no name")?;
+    let target = dest.join(name);
+    if !dest.is_dir() {
+        return Err(format!("{} is not a folder", dest.display()));
+    }
+    if dest.starts_with(normalize(path)) {
+        return Err("can't move a folder into itself".into());
+    }
+    // rename would replace an empty folder on Unix.
+    if target.exists() {
+        return Err(format!("{} already exists", target.display()));
+    }
+    let to = normalize(&target.to_string_lossy());
+    // A record left at `to` (its folder was removed earlier) would fail the UPDATE after the rename.
+    let taken: bool = db
+        .query_row(
+            "SELECT count(*) FROM projects WHERE path = ?1",
+            [&to],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if taken {
+        return Err(format!(
+            "Hangar already has a record at {to}; move the folder by hand and use Merge into…"
+        ));
+    }
+    // shortcut: rename only, so a move to another drive or volume fails; add copy + delete if users ask.
+    fs::rename(path, &target).map_err(|e| e.to_string())?;
+    let moved = |e: String| {
+        format!("moved to {to}, but Hangar's record didn't follow ({e}); use Merge into…")
+    };
+    db.execute(
+        "UPDATE projects SET path = ?2, missing = 0 WHERE path = ?1",
+        [path, &to],
+    )
+    .map_err(|e| moved(e.to_string()))?;
+    // The row is already at `to`; merge moves the history and records the alias.
+    merge(db, path, &to).map_err(|e| moved(e.to_string()))?;
+    Ok(to)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1515,6 +1578,105 @@ mod tests {
         // The guard runs again when the folder is trashed: a refused folder stays.
         assert!(trash_folder(&s(&data), &home, &[], &data).is_err());
         assert!(data.is_dir());
+        assert!(delete_folder(&s(&data), &home, &[], &data).is_err());
+        assert!(data.is_dir());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn delete_folder_removes_read_only_files() {
+        let home = std::env::temp_dir().join("hangar-delete-home");
+        let _ = fs::remove_dir_all(&home);
+        let objects = home.join("proj").join(".git").join("objects");
+        fs::create_dir_all(&objects).unwrap();
+        // git writes its objects read-only; on Windows that can stop a delete halfway.
+        let obj = objects.join("ab");
+        fs::write(&obj, "x").unwrap();
+        let mut perm = fs::metadata(&obj).unwrap().permissions();
+        perm.set_readonly(true);
+        fs::set_permissions(&obj, perm).unwrap();
+        let proj = normalize(&home.join("proj").to_string_lossy());
+        delete_folder(&proj, &home, &[], &home.join("data")).unwrap();
+        assert!(!Path::new(&proj).exists());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn move_folder_moves_record_history_and_alias() {
+        let home = std::env::temp_dir().join("hangar-move-home");
+        let _ = fs::remove_dir_all(&home);
+        let (src, dest) = (home.join("old").join("app"), home.join("new"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        let data = home.join("data");
+        let from = normalize(&src.to_string_lossy());
+        let mut db = test_db();
+        add_project(&db, &from, "no git");
+        db.execute("UPDATE projects SET tags = 'keep' WHERE path = ?1", [&from])
+            .unwrap();
+        db.execute(
+            "INSERT INTO lines VALUES ('f',?1,'claude','s','2026-01-01T00:00:00.000Z')",
+            [&from],
+        )
+        .unwrap();
+        fold(&db, "lines").unwrap();
+        let d = dest.to_string_lossy().to_string();
+        // Into itself, into a folder inside itself, or onto an existing folder: refused, nothing moves.
+        let sub = src.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let err = move_folder(&mut db, &from, &from, &home, &[], &data).unwrap_err();
+        assert!(err.contains("into itself"), "{err}");
+        let err =
+            move_folder(&mut db, &from, &sub.to_string_lossy(), &home, &[], &data).unwrap_err();
+        assert!(err.contains("into itself"), "{err}");
+        assert!(src.is_dir() && sub.is_dir());
+        fs::create_dir_all(dest.join("app")).unwrap();
+        let err = move_folder(&mut db, &from, &d, &home, &[], &data).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(src.is_dir());
+        fs::remove_dir(dest.join("app")).unwrap();
+
+        let to = move_folder(&mut db, &from, &d, &home, &[], &data).unwrap();
+        assert!(!src.exists() && Path::new(&to).is_dir());
+        let rows = list(&db, &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].path.as_str(),
+                rows[0].tags.as_str(),
+                rows[0].sessions
+            ),
+            (to.as_str(), "keep", 1)
+        );
+        let alias: String = db
+            .query_row(
+                "SELECT to_path FROM moves WHERE from_path = ?1",
+                [&from],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(alias, to);
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn move_folder_refuses_destination_record() {
+        let home = std::env::temp_dir().join("hangar-move-record-home");
+        let _ = fs::remove_dir_all(&home);
+        let (src, dest) = (home.join("old").join("app"), home.join("new"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        let data = home.join("data");
+        let from = normalize(&src.to_string_lossy());
+        let mut db = test_db();
+        add_project(&db, &from, "no git");
+        let d = dest.to_string_lossy().to_string();
+        // A record left by a folder removed earlier, at the path the move would take. Spelled as
+        // move_folder spells it: dest is canonicalized there (Windows short names, macOS /var symlink).
+        let taken = normalize(&PathBuf::from(normalize(&d)).join("app").to_string_lossy());
+        add_project(&db, &taken, "no git");
+        assert!(move_folder(&mut db, &from, &d, &home, &[], &data).is_err());
+        assert!(src.is_dir() && !dest.join("app").exists());
         fs::remove_dir_all(&home).unwrap();
     }
 

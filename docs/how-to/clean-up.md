@@ -1,6 +1,6 @@
 # Clean up projects and logs
 
-Hangar has four cleaners. The first two only change Hangar's own database. The last two touch files on disk and move them to the **Recycle Bin / Trash**, so you can restore them.
+Hangar has four cleaners. The first two only change Hangar's own database. The last two touch files on disk. Old logs always go to the **Recycle Bin / Trash**, so you can restore them; a project folder can also be deleted permanently or moved elsewhere.
 
 ## Forget projects whose folder is gone
 
@@ -27,11 +27,22 @@ This moves Claude Code transcripts (with their subagent and tool-result folders)
 
 1. Select the project and open **Clean** in the detail panel.
 2. Type the project's name exactly as shown.
-3. Click **Move folder to Recycle Bin / Trash**.
+3. Click **Move folder to Recycle Bin / Trash**, or **Delete permanently** to skip the Recycle Bin / Trash. A permanent delete can't be undone.
 
-The project stays in Hangar, marked *(missing)*, until you forget it.
+The prompt shows the folder's size from the last scan, so you see how much space it frees. The project stays in Hangar, marked *(missing)*, until you forget it.
 
-Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder), `~/.ssh`, `AppData` and `~/Library` (and anything in them), Hangar's own data folder (or anything above it), and `Documents` itself; a project inside `Documents` can still go. The check runs again at the moment the folder is moved. Paths are compared after resolving their real spelling, so a root typed in another case still counts.
+## Move a project folder
+
+1. Select the project and open **Clean** in the detail panel.
+2. Type the project's name exactly as shown.
+3. Under **Move into folder**, type the folder it should go into, for example `D:\Archive`. The project folder keeps its name inside it.
+4. Click **Move folder**.
+
+The project keeps its sessions, active time, tags, status and notes, and later log lines from the old path land on the new one, as after [a merge](merge-a-moved-project.md). Hangar rescans to read the new folder's size and git state.
+
+Hangar refuses when a folder with that name is already there, when Hangar already has a record at that new path (a project whose folder was removed earlier), or when the target lies inside the project itself. It only moves within one drive or volume; to move to another, move the folder yourself and [merge](merge-a-moved-project.md).
+
+Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder), `~/.ssh`, `AppData` and `~/Library` (and anything in them), Hangar's own data folder (or anything above it), and `Documents` itself; a project inside `Documents` can still go. The same refusals hold for deleting permanently and for moving. The check runs again at the moment the folder is deleted or moved. Paths are compared after resolving their real spelling, so a root typed in another case still counts.
 
 ## Uninstall Hangar (Windows)
 
