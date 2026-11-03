@@ -40,7 +40,7 @@ The prompt shows the folder's size from the last scan, so you see how much space
 
 The project keeps its sessions, active time, tags, status and notes, and later log lines from the old path land on the new one, as after [a merge](merge-a-moved-project.md). Hangar rescans to read the new folder's size and git state.
 
-Hangar refuses when a folder with that name is already there, or when the target lies inside the project itself. It only moves within one drive or volume; to move to another, move the folder yourself and [merge](merge-a-moved-project.md).
+Hangar refuses when a folder with that name is already there, when Hangar already has a record at that new path (a project whose folder was removed earlier), or when the target lies inside the project itself. It only moves within one drive or volume; to move to another, move the folder yourself and [merge](merge-a-moved-project.md).
 
 Hangar refuses to delete your home folder or anything above it, a configured scan root (or anything above one), the AI tools' own data folders (`~/.claude`, `~/.codex`, `~/.gemini` and the Hermes Agent folder), `~/.ssh`, `AppData` and `~/Library` (and anything in them), Hangar's own data folder (or anything above it), and `Documents` itself; a project inside `Documents` can still go. The same refusals hold for deleting permanently and for moving. The check runs again at the moment the folder is deleted or moved. Paths are compared after resolving their real spelling, so a root typed in another case still counts.
 

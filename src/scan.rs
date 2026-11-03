@@ -1490,9 +1490,22 @@ pub fn move_folder(
     if target.exists() {
         return Err(format!("{} already exists", target.display()));
     }
+    let to = normalize(&target.to_string_lossy());
+    // A record left at `to` (its folder was removed earlier) would fail the UPDATE after the rename.
+    let taken: bool = db
+        .query_row(
+            "SELECT count(*) FROM projects WHERE path = ?1",
+            [&to],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if taken {
+        return Err(format!(
+            "Hangar already has a record at {to}; move the folder by hand and use Merge into…"
+        ));
+    }
     // shortcut: rename only, so a move to another drive or volume fails; add copy + delete if users ask.
     fs::rename(path, &target).map_err(|e| e.to_string())?;
-    let to = normalize(&target.to_string_lossy());
     let moved = |e: String| {
         format!("moved to {to}, but Hangar's record didn't follow ({e}); use Merge into…")
     };
@@ -1643,6 +1656,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(alias, to);
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn move_folder_refuses_destination_record() {
+        let home = std::env::temp_dir().join("hangar-move-record-home");
+        let _ = fs::remove_dir_all(&home);
+        let (src, dest) = (home.join("old").join("app"), home.join("new"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        let data = home.join("data");
+        let from = normalize(&src.to_string_lossy());
+        let mut db = test_db();
+        add_project(&db, &from, "no git");
+        // A record left by a folder removed earlier, at the path the move would take.
+        add_project(
+            &db,
+            &normalize(&dest.join("app").to_string_lossy()),
+            "no git",
+        );
+        let d = dest.to_string_lossy().to_string();
+        assert!(move_folder(&mut db, &from, &d, &home, &[], &data).is_err());
+        assert!(src.is_dir() && !dest.join("app").exists());
         fs::remove_dir_all(&home).unwrap();
     }
 
