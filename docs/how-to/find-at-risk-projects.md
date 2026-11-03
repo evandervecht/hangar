@@ -25,4 +25,4 @@ Hangar doesn't skip this check itself, because it protects you from config in a 
 
 ## Before deleting a folder
 
-**Clean** → **Move folder to Recycle Bin / Trash** shows a warning when the folder has uncommitted or unpushed work.
+**Clean** shows a warning above **Move folder to Recycle Bin / Trash**, **Delete permanently** and **Move folder** when the folder has uncommitted or unpushed work.

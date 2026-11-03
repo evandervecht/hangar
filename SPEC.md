@@ -97,6 +97,9 @@ Only new/changed log files are re-imported. History is never purged.
 ## v0.8.4 additions
 - Resume opens the terminal set in `terminal` (Settings → Terminal, warns when not in PATH): a program and its arguments,
   the tool's command appended as separate arguments, no shell. Empty keeps cmd / Terminal; set, it also works on Linux.
+- Clean → folder: **Delete permanently** and **Move folder** (into a typed folder, same drive/volume) next to Trash, behind
+  the same typed name and `delete_guard`; a move takes the project's record, history and an old-path alias along (#42).
+  The prompt shows the folder's size.
 
 ## Deferred
 Next: v1.0.0, starting with a public beta.

@@ -43,7 +43,7 @@ Most projects never get a status set by hand, so Hangar derives one: *active* wh
 
 ## Why cleaning uses the Recycle Bin
 
-Deleting log files or project folders can't be undone from inside Hangar, and a wrong click on a list of a hundred similar names is easy. So destructive cleaners move to the Recycle Bin / Trash, deleting a folder needs its name typed, and Hangar refuses to touch your home folder, scan roots and the AI tools' own data.
+Deleting log files or project folders can't be undone from inside Hangar, and a wrong click on a list of a hundred similar names is easy. So destructive cleaners move to the Recycle Bin / Trash by default, deleting or moving a folder needs its name typed, and Hangar refuses to touch your home folder, scan roots and the AI tools' own data. **Delete permanently** is for when the Recycle Bin is no help (a folder too big for it, or space you need now); it sits behind the same typed name and the same refusals.
 
 ## Health: is the work safe?
 
