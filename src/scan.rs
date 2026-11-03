@@ -1670,13 +1670,11 @@ mod tests {
         let from = normalize(&src.to_string_lossy());
         let mut db = test_db();
         add_project(&db, &from, "no git");
-        // A record left by a folder removed earlier, at the path the move would take.
-        add_project(
-            &db,
-            &normalize(&dest.join("app").to_string_lossy()),
-            "no git",
-        );
         let d = dest.to_string_lossy().to_string();
+        // A record left by a folder removed earlier, at the path the move would take. Spelled as
+        // move_folder spells it: dest is canonicalized there (Windows short names, macOS /var symlink).
+        let taken = normalize(&PathBuf::from(normalize(&d)).join("app").to_string_lossy());
+        add_project(&db, &taken, "no git");
         assert!(move_folder(&mut db, &from, &d, &home, &[], &data).is_err());
         assert!(src.is_dir() && !dest.join("app").exists());
         fs::remove_dir_all(&home).unwrap();
