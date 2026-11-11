@@ -799,9 +799,19 @@ fn gitdir(dir: &Path) -> Option<PathBuf> {
     if !dotgit.is_file() {
         return None;
     }
-    // Worktrees and submodules: `.git` is a file pointing at the real git dir.
-    let s = fs::read_to_string(&dotgit).unwrap_or_default();
-    let g = dir.join(s.trim().trim_start_matches("gitdir:").trim());
+    // Worktrees and submodules: `.git` is a file pointing at the real git dir. Git reads it as bytes:
+    // the prefix is exactly `gitdir: `, trailing newlines go, and the rest is the path as written.
+    // Anything else is unknown (None), so the repo is treated as unsafe rather than checked elsewhere.
+    let s = fs::read(&dotgit).ok()?;
+    let target = s.strip_prefix(b"gitdir: ")?;
+    let end = target
+        .iter()
+        .rposition(|&b| b != b'\n' && b != b'\r')
+        .map_or(0, |i| i + 1);
+    let target = std::str::from_utf8(&target[..end])
+        .ok()
+        .filter(|t| !t.is_empty())?;
+    let g = dir.join(target);
     Some(match fs::read_to_string(g.join("commondir")) {
         Ok(c) => g.join(c.trim()),
         Err(_) => g,
@@ -2238,13 +2248,30 @@ mod tests {
         text.push_str("[filter \"x\"]\n\tclean = echo run-me\n");
         fs::write(&config, &text).unwrap();
         let health = git_health(&dir);
-        assert_eq!((health.changed, health.stashed), (None, None));
+        assert_eq!((health.changed, health.stashed), (None, Some(0)));
 
         assert!(config_runs_filters("  [Include]\n\tpath = /elsewhere\n"));
         assert!(config_runs_filters("[includeIf \"gitdir:~/\"]\n"));
         assert!(!config_runs_filters(
             "[core]\n\tfilemode = false\n[remote \"origin\"]\n"
         ));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gitdir_reads_the_gitfile_the_way_git_does() {
+        let dir = std::env::temp_dir().join("hangar-gitfile-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("real")).unwrap();
+        let gitfile = dir.join(".git");
+        let read = |bytes: &[u8]| {
+            fs::write(&gitfile, bytes).unwrap();
+            gitdir(&dir)
+        };
+        assert_eq!(read(b"gitdir: real\r\n"), Some(dir.join("real")));
+        assert_eq!(read(b"gitdir:real\n"), None);
+        assert_eq!(read(b"gitdir: real  \n"), Some(dir.join("real  ")));
+        assert_eq!(read(b"gitdir: \xff\n"), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 
