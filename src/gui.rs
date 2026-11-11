@@ -1276,9 +1276,13 @@ fn newer(latest: &str, current: &str) -> bool {
     parts(latest) > parts(current)
 }
 
+// The path can come from a session log: a file or an unreachable share would be launched, not browsed.
+fn is_folder(path: &str) -> bool {
+    Path::new(path).is_dir()
+}
+
 fn open(path: &str) {
-    // The path can come from a session log: a file or an unreachable share would be launched, not browsed.
-    if !Path::new(path).is_dir() {
+    if !is_folder(path) {
         return;
     }
     let cmd = if cfg!(windows) {
@@ -1501,4 +1505,17 @@ fn newer_compares_numbers_not_text() {
     assert!(newer("1.0.0", "0.9.9"));
     assert!(!newer("0.7.1", "0.7.1"));
     assert!(!newer("0.7.0", "0.7.1"));
+}
+
+#[test]
+fn open_takes_only_existing_folders() {
+    let base = std::env::temp_dir().join("hangar-open-folder-test");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("session.jsonl");
+    std::fs::write(&file, "{}").unwrap();
+    assert!(is_folder(base.to_str().unwrap()));
+    assert!(!is_folder(file.to_str().unwrap()));
+    assert!(!is_folder(base.join("missing").to_str().unwrap()));
+    std::fs::remove_dir_all(&base).unwrap();
 }
