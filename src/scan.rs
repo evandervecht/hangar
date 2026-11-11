@@ -783,6 +783,14 @@ fn plain(s: &str) -> String {
 }
 
 pub fn origin(dir: &Path) -> String {
+    match git_config(dir) {
+        Some(config) => parse_origin(&config).unwrap_or_else(|| "local only".into()),
+        None => "no git".into(),
+    }
+}
+
+/// The repo's own config file as text; `None` when the folder has no `.git`.
+fn git_config(dir: &Path) -> Option<String> {
     let dotgit = dir.join(".git");
     let gitdir = if dotgit.is_dir() {
         dotgit
@@ -795,10 +803,19 @@ pub fn origin(dir: &Path) -> String {
             Err(_) => g,
         }
     } else {
-        return "no git".into();
+        return None;
     };
-    parse_origin(&fs::read_to_string(gitdir.join("config")).unwrap_or_default())
-        .unwrap_or_else(|| "local only".into())
+    Some(fs::read_to_string(gitdir.join("config")).unwrap_or_default())
+}
+
+/// A repo config that defines a filter, or includes another file that could: `git status` would
+/// run that filter's command. Such a config doesn't come with a clone, only with a copied folder.
+// shortcut: a worktree's own config.worktree isn't read; add it if a filter there ever matters.
+fn config_runs_filters(config: &str) -> bool {
+    config.lines().any(|l| {
+        let l = l.trim_start().to_ascii_lowercase();
+        l.starts_with("[filter") || l.starts_with("[include")
+    })
 }
 
 fn parse_origin(cfg: &str) -> Option<String> {
@@ -1051,7 +1068,9 @@ struct GitHealth {
 fn git_health(dir: &Path) -> GitHealth {
     // --no-optional-locks: never take index.lock in repos an agent may be working in.
     // core.fsmonitor off: a repo's own config (e.g. from an unzipped archive) could name any program to run.
-    // shortcut: clean/process filters from repo config can still run during status; fine while repos are your own.
+    // status would run a filter the repo's config defines, so it's skipped there and shows `?`.
+    // --ignore-submodules=dirty: no status inside submodules, whose configs aren't checked here.
+    let safe = git_config(dir).is_some_and(|c| !config_runs_filters(&c));
     let git = |args: &[&str]| {
         let out = quiet_cmd("git")
             .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
@@ -1075,7 +1094,10 @@ fn git_health(dir: &Path) -> GitHealth {
     ])
     .and_then(|s| s.parse().ok());
     GitHealth {
-        changed: git(&["status", "--porcelain"]).map(|s| s.lines().count() as i64),
+        changed: safe
+            .then(|| git(&["status", "--porcelain", "--ignore-submodules=dirty"]))
+            .flatten()
+            .map(|s| s.lines().count() as i64),
         unpushed,
         stashed: git(&["stash", "list"]).map(|s| s.lines().count() as i64),
         last: git(&["log", "-1", "--format=%cI"]).filter(|s| !s.is_empty()),
@@ -2177,6 +2199,34 @@ mod tests {
             .unwrap();
         assert_eq!(list(&db, &[]).unwrap()[0].disk_bytes, Some(42));
         assert!(csv(&list(&db, &[]).unwrap()).contains(",disk_bytes\r\n"));
+    }
+
+    #[test]
+    fn git_health_skips_status_when_the_repo_config_defines_a_filter() {
+        let dir = std::env::temp_dir().join("hangar-git-filter-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        assert_eq!(git_health(&dir).changed, Some(1));
+
+        // What a zipped repo can carry: a filter command in its own config.
+        let config = dir.join(".git").join("config");
+        let mut text = fs::read_to_string(&config).unwrap();
+        text.push_str("[filter \"x\"]\n\tclean = echo run-me\n");
+        fs::write(&config, &text).unwrap();
+        assert_eq!(git_health(&dir).changed, None);
+
+        assert!(config_runs_filters("  [Include]\n\tpath = /elsewhere\n"));
+        assert!(config_runs_filters("[includeIf \"gitdir:~/\"]\n"));
+        assert!(!config_runs_filters(
+            "[core]\n\tfilemode = false\n[remote \"origin\"]\n"
+        ));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

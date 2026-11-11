@@ -102,6 +102,9 @@ Only new/changed log files are re-imported. History is never purged.
   The prompt shows the folder's size.
 - Check for updates reads the `releases/latest` redirect on github.com instead of the GitHub API, which answered 403
   once a shared IP had used its 60 unauthenticated calls an hour (#41).
+- Git health: no `git status` in a repo whose own config defines a filter or an include (the uncommitted count shows `?`),
+  and none inside submodules; Resume sets `NoDefaultCurrentDirectoryInExePath` so cmd can't run a `claude.bat` from the
+  session folder; **Open folder** only opens folders; `install.sh` adds `~/.local/bin` at the end of PATH.
 
 ## Deferred
 Next: v1.0.0, starting with a public beta.
