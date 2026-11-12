@@ -783,22 +783,60 @@ fn plain(s: &str) -> String {
 }
 
 pub fn origin(dir: &Path) -> String {
-    let dotgit = dir.join(".git");
-    let gitdir = if dotgit.is_dir() {
-        dotgit
-    } else if dotgit.is_file() {
-        // Worktrees and submodules: `.git` is a file pointing at the real git dir.
-        let s = fs::read_to_string(&dotgit).unwrap_or_default();
-        let g = dir.join(s.trim().trim_start_matches("gitdir:").trim());
-        match fs::read_to_string(g.join("commondir")) {
-            Ok(c) => g.join(c.trim()),
-            Err(_) => g,
-        }
-    } else {
+    let Some(gitdir) = gitdir(dir) else {
         return "no git".into();
     };
     parse_origin(&fs::read_to_string(gitdir.join("config")).unwrap_or_default())
         .unwrap_or_else(|| "local only".into())
+}
+
+/// The git dir holding the repo's shared config; `None` when the folder has no `.git`.
+fn gitdir(dir: &Path) -> Option<PathBuf> {
+    let dotgit = dir.join(".git");
+    if dotgit.is_dir() {
+        return Some(dotgit);
+    }
+    if !dotgit.is_file() {
+        return None;
+    }
+    // Worktrees and submodules: `.git` is a file pointing at the real git dir. Git reads it as bytes:
+    // the prefix is exactly `gitdir: `, trailing newlines go, and the rest is the path as written.
+    // Anything else is unknown (None), so the repo is treated as unsafe rather than checked elsewhere.
+    let s = fs::read(&dotgit).ok()?;
+    let target = s.strip_prefix(b"gitdir: ")?;
+    let end = target
+        .iter()
+        .rposition(|&b| b != b'\n' && b != b'\r')
+        .map_or(0, |i| i + 1);
+    let target = std::str::from_utf8(&target[..end])
+        .ok()
+        .filter(|t| !t.is_empty())?;
+    let g = dir.join(target);
+    Some(match fs::read_to_string(g.join("commondir")) {
+        Ok(c) => g.join(c.trim()),
+        Err(_) => g,
+    })
+}
+
+/// Whether git may run on this repo: its shared config must be readable as UTF-8 (git accepts other
+/// bytes in comments, so a lossy read could hide a filter) and must not run programs (see `config_runs_filters`).
+fn repo_config_is_safe(dir: &Path) -> bool {
+    gitdir(dir)
+        .and_then(|g| fs::read(g.join("config")).ok())
+        .and_then(|b| String::from_utf8(b).ok())
+        .is_some_and(|c| !config_runs_filters(&c))
+}
+
+/// A repo config that defines a filter, includes another file that could, or turns on worktree
+/// config (a `config.worktree` that git then reads). Such a config doesn't come with a clone, only
+/// with a copied folder, and `git status` would run its filter's command.
+/// Git accepts several section headers on one line, so every `[` is checked, not only line starts.
+fn config_runs_filters(config: &str) -> bool {
+    let lower = config.to_ascii_lowercase();
+    lower.split('[').skip(1).any(|s| {
+        let s = s.trim_start();
+        s.starts_with("filter") || s.starts_with("include")
+    }) || lower.contains("worktreeconfig")
 }
 
 fn parse_origin(cfg: &str) -> Option<String> {
@@ -1051,10 +1089,19 @@ struct GitHealth {
 fn git_health(dir: &Path) -> GitHealth {
     // --no-optional-locks: never take index.lock in repos an agent may be working in.
     // core.fsmonitor off: a repo's own config (e.g. from an unzipped archive) could name any program to run.
-    // shortcut: clean/process filters from repo config can still run during status; fine while repos are your own.
+    // log.showSignature off: a repo's config could turn it on and name a gpg program, which log would run.
+    // status would run a filter the repo's config defines, so it's skipped there and shows `?`.
+    // --ignore-submodules=dirty: no status inside submodules, whose configs aren't checked here.
+    let safe = repo_config_is_safe(dir);
     let git = |args: &[&str]| {
         let out = quiet_cmd("git")
-            .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
+            .args([
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "log.showSignature=false",
+            ])
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -1075,7 +1122,10 @@ fn git_health(dir: &Path) -> GitHealth {
     ])
     .and_then(|s| s.parse().ok());
     GitHealth {
-        changed: git(&["status", "--porcelain"]).map(|s| s.lines().count() as i64),
+        changed: safe
+            .then(|| git(&["status", "--porcelain", "--ignore-submodules=dirty"]))
+            .flatten()
+            .map(|s| s.lines().count() as i64),
         unpushed,
         stashed: git(&["stash", "list"]).map(|s| s.lines().count() as i64),
         last: git(&["log", "-1", "--format=%cI"]).filter(|s| !s.is_empty()),
@@ -2177,6 +2227,114 @@ mod tests {
             .unwrap();
         assert_eq!(list(&db, &[]).unwrap()[0].disk_bytes, Some(42));
         assert!(csv(&list(&db, &[]).unwrap()).contains(",disk_bytes\r\n"));
+    }
+
+    #[test]
+    fn git_health_skips_status_when_the_repo_config_defines_a_filter() {
+        let dir = std::env::temp_dir().join("hangar-git-filter-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        assert_eq!(git_health(&dir).changed, Some(1));
+
+        // What a zipped repo can carry: a filter command in its own config.
+        let config = dir.join(".git").join("config");
+        let mut text = fs::read_to_string(&config).unwrap();
+        text.push_str("[filter \"x\"]\n\tclean = echo run-me\n");
+        fs::write(&config, &text).unwrap();
+        let health = git_health(&dir);
+        assert_eq!((health.changed, health.stashed), (None, Some(0)));
+
+        assert!(config_runs_filters("  [Include]\n\tpath = /elsewhere\n"));
+        assert!(config_runs_filters("[includeIf \"gitdir:~/\"]\n"));
+        assert!(!config_runs_filters(
+            "[core]\n\tfilemode = false\n[remote \"origin\"]\n"
+        ));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gitdir_reads_the_gitfile_the_way_git_does() {
+        let dir = std::env::temp_dir().join("hangar-gitfile-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("real")).unwrap();
+        let gitfile = dir.join(".git");
+        let read = |bytes: &[u8]| {
+            fs::write(&gitfile, bytes).unwrap();
+            gitdir(&dir)
+        };
+        assert_eq!(read(b"gitdir: real\r\n"), Some(dir.join("real")));
+        assert_eq!(read(b"gitdir:real\n"), None);
+        assert_eq!(read(b"gitdir: real  \n"), Some(dir.join("real  ")));
+        assert_eq!(read(b"gitdir: \xff\n"), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn git_health_skips_status_when_a_section_header_shares_a_line() {
+        let dir = std::env::temp_dir().join("hangar-git-header-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        let config = dir.join(".git").join("config");
+        let mut text = fs::read_to_string(&config).unwrap();
+        text.push_str("[core][filter \"x\"]\n\tclean = echo run-me\n");
+        fs::write(&config, &text).unwrap();
+        assert_eq!(git_health(&dir).changed, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn git_health_skips_status_when_the_config_is_not_utf8() {
+        let dir = std::env::temp_dir().join("hangar-git-bytes-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        let config = dir.join(".git").join("config");
+        let mut bytes = fs::read(&config).unwrap();
+        bytes.extend_from_slice(b"# \xff\n[filter \"x\"]\n\tclean = echo run-me\n");
+        fs::write(&config, &bytes).unwrap();
+        assert_eq!(git_health(&dir).changed, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn git_health_skips_status_when_worktree_config_is_enabled() {
+        let dir = std::env::temp_dir().join("hangar-git-worktree-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        let config = dir.join(".git").join("config");
+        let mut text = fs::read_to_string(&config).unwrap();
+        text.push_str("[extensions]\n\tworktreeConfig = true\n");
+        fs::write(&config, &text).unwrap();
+        fs::write(
+            dir.join(".git").join("config.worktree"),
+            "[filter \"x\"]\n\tclean = echo run-me\n",
+        )
+        .unwrap();
+        assert_eq!(git_health(&dir).changed, None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

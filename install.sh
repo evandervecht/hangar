@@ -17,7 +17,7 @@ case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
   *)
     if [ "$(uname)" = Darwin ]; then rc="$HOME/.zshrc"; else rc="$HOME/.profile"; fi
-    grep -qs 'HOME/.local/bin' "$rc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+    grep -qs 'HOME/.local/bin' "$rc" || echo 'export PATH="$PATH:$HOME/.local/bin"' >> "$rc"
     echo "Added ~/.local/bin to PATH in $rc."
     ;;
 esac

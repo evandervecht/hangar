@@ -1276,7 +1276,15 @@ fn newer(latest: &str, current: &str) -> bool {
     parts(latest) > parts(current)
 }
 
+// The path can come from a session log: a file or an unreachable share would be launched, not browsed.
+fn is_folder(path: &str) -> bool {
+    Path::new(path).is_dir()
+}
+
 fn open(path: &str) {
+    if !is_folder(path) {
+        return;
+    }
     let cmd = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -1295,6 +1303,10 @@ fn resume(s: &scan::Resumable, terminal: &str) -> Result<(), String> {
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
+
+/// Tells cmd.exe not to look for a command in the current folder first: the terminal starts in the
+/// session's folder, where a repo could hold its own `claude.bat`.
+const NO_CWD_SEARCH: &str = "NoDefaultCurrentDirectoryInExePath";
 
 /// `terminal` (Settings) is a program plus its arguments; the tool's words go after it as separate
 /// arguments, never through a shell. Empty: the platform's own terminal.
@@ -1319,7 +1331,7 @@ fn resume_command(s: &scan::Resumable, terminal: &str) -> Result<std::process::C
     let mut prefix = terminal.split_whitespace();
     if let Some(program) = prefix.next() {
         let mut c = std::process::Command::new(program);
-        c.args(prefix).args(words);
+        c.args(prefix).args(words).env(NO_CWD_SEARCH, "1");
         return Ok(c);
     }
     let cmd = words.join(" ");
@@ -1329,6 +1341,7 @@ fn resume_command(s: &scan::Resumable, terminal: &str) -> Result<std::process::C
         // start's first quoted argument is the window title.
         let mut c = scan::quiet_cmd("cmd");
         c.raw_arg(format!("/C start \"Hangar\" cmd /K {cmd}"));
+        c.env(NO_CWD_SEARCH, "1");
         Ok(c)
     };
     #[cfg(target_os = "macos")]
@@ -1440,6 +1453,11 @@ fn resume_uses_the_configured_terminal() {
     assert_eq!(c.get_program(), "wt");
     let args: Vec<_> = c.get_args().collect();
     assert_eq!(args, ["-d", ".", "cmd", "/k", "codex", "resume", "abc-1"]);
+    assert!(
+        c.get_envs()
+            .any(|(k, v)| k == NO_CWD_SEARCH && v.is_some_and(|v| v == "1")),
+        "the terminal must not resolve the tool from the session folder"
+    );
 }
 
 #[test]
@@ -1487,4 +1505,17 @@ fn newer_compares_numbers_not_text() {
     assert!(newer("1.0.0", "0.9.9"));
     assert!(!newer("0.7.1", "0.7.1"));
     assert!(!newer("0.7.0", "0.7.1"));
+}
+
+#[test]
+fn open_takes_only_existing_folders() {
+    let base = std::env::temp_dir().join("hangar-open-folder-test");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("session.jsonl");
+    std::fs::write(&file, "{}").unwrap();
+    assert!(is_folder(base.to_str().unwrap()));
+    assert!(!is_folder(file.to_str().unwrap()));
+    assert!(!is_folder(base.join("missing").to_str().unwrap()));
+    std::fs::remove_dir_all(&base).unwrap();
 }

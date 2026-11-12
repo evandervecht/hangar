@@ -28,4 +28,4 @@ Compare the output with the line for that file in `SHA256SUMS`. They must match 
 gh attestation verify hangar-0.8.2-darwin-arm64.tar.gz --repo evandervecht/hangar
 ```
 
-It prints `Verification succeeded` when the file was built by Hangar's release workflow.
+It prints `Verification succeeded` when the file is one that Hangar's release workflow attested. The workflow attests the files in the draft release after the builds upload them, so this rules out a file swapped in after publishing.
